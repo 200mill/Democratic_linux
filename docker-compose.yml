@@ -1,0 +1,16 @@
+services:
+  democratic-linux:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - vm-data:/app/vm
+    privileged: true
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - QEMU_MEM=512M
+      - QEMU_CPUS=1
+
+volumes:
+  vm-data:

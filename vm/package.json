@@ -1,0 +1,17 @@
+{
+  "name": "democratic-linux",
+  "version": "1.0.0",
+  "description": "WebSocket + Web terminal emulator backed by a shared QEMU Linux VM",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
