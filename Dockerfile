@@ -49,8 +49,8 @@ VOLUME ["/app/vm"]
 # Entrypoint: (1) build the base VM image if missing, (2) generate a
 # self-signed TLS cert if GENERATE_SELF_SIGNED_CERT=true and the cert files
 # don't already exist, then (3) start the server.
-CMD bash -c "\
-  [ -f vm/base.img ] || bash scripts/create-image.sh; \
+CMD bash -c "set -e; \
+  [ -f vm/base.img ] || bash scripts/create-image.sh && \
   if [ \"\${GENERATE_SELF_SIGNED_CERT:-false}\" = 'true' ] \
      && [ -n \"\${SSL_CERT}\" ] && [ -n \"\${SSL_KEY}\" ] \
      && [ ! -f \"\${SSL_CERT}\" ]; then \
@@ -60,5 +60,5 @@ CMD bash -c "\
       -subj '/CN=democratic-linux' \
       -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'; \
     echo '[SSL] Self-signed certificate generated.'; \
-  fi; \
+  fi && \
   node src/server.js"

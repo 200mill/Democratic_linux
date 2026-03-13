@@ -9,8 +9,6 @@ services:
       - ./certs:/app/certs    # writable — needed for auto-generated self-signed cert
     privileged: true
     restart: on-failure:3
-    dns:
-      - 192.168.253.2
     environment:
       - HTTP_PORT=80
       - HTTPS_PORT=443
