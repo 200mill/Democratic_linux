@@ -433,13 +433,23 @@
 
   // ── Request open / close tab (sends to server) ─────────────────────────────
 
+  function generateId() {
+    // crypto.randomUUID() requires a secure context (HTTPS/localhost).
+    // Fall back to a manual UUID v4 for plain HTTP origins.
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+  }
+
   function requestOpenTab() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!vmReady) {
       // Show a temporary notice in the first tab or overlay.
       return;
     }
-    const tabId = crypto.randomUUID();
+    const tabId = generateId();
     // Optimistically create the local tab immediately so the user sees feedback.
     createLocalTab(tabId, `Tab ${tabs.size + 1}`);
     selectTab(tabId);
