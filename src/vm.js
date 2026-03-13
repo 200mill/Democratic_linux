@@ -26,8 +26,8 @@ const { Client }    = require('ssh2');
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const config = {
-  baseImage:      path.resolve(__dirname, '..', 'vm', 'base.qcow2'),
-  workImage:      path.resolve(__dirname, '..', 'vm', 'work.qcow2'),
+  baseImage:      path.resolve(__dirname, '..', 'vm', 'base.img'),
+  workImage:      path.resolve(__dirname, '..', 'vm', 'work.img'),
   // Host-side port that QEMU forwards to guest SSH port 22.
   sshPort:        parseInt(process.env.SSH_PORT || '2222', 10),
   // Credentials for the root account inside the VM (empty password).
@@ -120,7 +120,14 @@ class VMManager extends EventEmitter {
       return;
     }
 
-    fs.copyFileSync(config.baseImage, config.workImage);
+    // Use cp --sparse=always to preserve holes and avoid inflating disk usage.
+    try {
+      require('child_process').execFileSync(
+        'cp', ['--sparse=always', config.baseImage, config.workImage]
+      );
+    } catch (_) {
+      fs.copyFileSync(config.baseImage, config.workImage);
+    }
     console.log('[VM] Prepared fresh working image.');
   }
 
@@ -128,7 +135,7 @@ class VMManager extends EventEmitter {
     const args = [
       '-m',    config.memory,
       '-smp',  config.cpus,
-      '-drive', `file=${config.workImage},format=qcow2,if=virtio`,
+      '-drive', `file=${config.workImage},format=raw,if=virtio`,
       // User-mode networking: forward host 2222 → guest 22.
       '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:${config.sshPort}-:22`,
       '-device', 'virtio-net-pci,netdev=net0',

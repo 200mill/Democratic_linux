@@ -6,7 +6,7 @@ services:
     volumes:
       - vm-data:/app/vm
     privileged: true
-    restart: unless-stopped
+    restart: on-failure:3
     environment:
       - PORT=3000
       - QEMU_MEM=512M

@@ -5,7 +5,8 @@ FROM node:20-slim
 # - fdisk: provides sfdisk for partitioning loop devices
 # - e2fsprogs: provides mkfs.ext4
 # - mount: mount(8) and umount(8)
-# - grub-pc-bin/grub-common: install GRUB bootloader into the disk image
+# - grub-pc: provides grub-install (host-side, writes MBR + /boot/grub)
+# - grub-pc-bin/grub-common: GRUB i386-pc modules and shared files
 # - build-essential/python3: needed for ssh2's optional native module cpu-features
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -14,6 +15,7 @@ RUN apt-get update && \
         wget \
         ca-certificates \
         debootstrap \
+        grub-pc \
         grub-pc-bin \
         grub-common \
         build-essential \
@@ -42,4 +44,4 @@ EXPOSE 3000
 VOLUME ["/app/vm"]
 
 # Entrypoint: build the base image if it doesn't exist, then start the server.
-CMD bash -c "[ -f vm/base.qcow2 ] || bash scripts/create-image.sh && node src/server.js"
+CMD bash -c "[ -f vm/base.img ] || bash scripts/create-image.sh && node src/server.js"
