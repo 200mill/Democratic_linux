@@ -39,17 +39,21 @@ const { Client }    = require('ssh2');
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const config = {
-  baseImage:      path.resolve(__dirname, '..', 'vm', 'base.img'),
-  workImage:      path.resolve(__dirname, '..', 'vm', 'work.img'),
-  sshPort:        parseInt(process.env.SSH_PORT || '2222', 10),
-  sshUser:        'root',
-  sshPassword:    '',
-  restartDelayMs: 5000,
-  qemuBin:        process.env.QEMU_BIN || 'qemu-system-x86_64',
-  memory:         process.env.QEMU_MEM  || '512M',
-  cpus:           process.env.QEMU_CPUS || '1',
-  sshRetryMs:     5000,
-  sshTimeoutMs:   15 * 60 * 1000,
+  baseImage:        path.resolve(__dirname, '..', 'vm', 'base.img'),
+  workImage:        path.resolve(__dirname, '..', 'vm', 'work.img'),
+  sshPort:          parseInt(process.env.SSH_PORT || '2222', 10),
+  sshUser:          'root',
+  sshPassword:      '',
+  restartDelayMs:   5000,
+  qemuBin:          process.env.QEMU_BIN || 'qemu-system-x86_64',
+  memory:           process.env.QEMU_MEM  || '512M',
+  cpus:             process.env.QEMU_CPUS || '1',
+  sshRetryMs:       5000,
+  sshTimeoutMs:     15 * 60 * 1000,
+  // Watchdog: probe SSH every watchdogIntervalMs while the VM is running.
+  // If SSH fails watchdogMaxFailures times in a row, trigger a reset.
+  watchdogIntervalMs:  15000,
+  watchdogMaxFailures: 3,
 };
 
 // ── TabSession ───────────────────────────────────────────────────────────────
@@ -165,11 +169,13 @@ class TabSession extends EventEmitter {
 class VMManager extends EventEmitter {
   constructor() {
     super();
-    this._qemuProc        = null;
-    this._running         = false;
-    this._resetInProgress = false;
-    this._ready           = false;   // true once SSH is accepting connections
-    this._tabs            = new Map(); // id → TabSession
+    this._qemuProc           = null;
+    this._running            = false;
+    this._resetInProgress    = false;
+    this._ready              = false;   // true once SSH is accepting connections
+    this._tabs               = new Map(); // id → TabSession
+    this._watchdogTimer      = null;
+    this._watchdogFailures   = 0;
   }
 
   get isReady() { return this._ready; }
@@ -185,6 +191,7 @@ class VMManager extends EventEmitter {
   stop() {
     this._running = false;
     this._ready   = false;
+    this._stopWatchdog();
     this._closeAllTabs();
     this._killQemu();
   }
@@ -193,6 +200,7 @@ class VMManager extends EventEmitter {
     if (this._resetInProgress) return;
     this._resetInProgress = true;
     this._ready = false;
+    this._stopWatchdog();
     this.emit('reset');
     this._closeAllTabs();
     this._killQemu();
@@ -293,6 +301,7 @@ class VMManager extends EventEmitter {
       console.log(`[VM] QEMU exited (code=${code}, signal=${signal})`);
       this._qemuProc = null;
       this._ready = false;
+      this._stopWatchdog();
       this._closeAllTabs();
 
       if (this._running && !this._resetInProgress) {
@@ -331,12 +340,50 @@ class VMManager extends EventEmitter {
       if (ok) {
         console.log('[VM] SSH is ready.');
         this._ready = true;
+        this._watchdogFailures = 0;
+        this._startWatchdog();
         this.emit('ready');
         return;
       }
 
       await this._sleep(config.sshRetryMs);
     }
+  }
+
+  /** Start the SSH watchdog that detects a broken-but-running VM (e.g. after rm -rf /). */
+  _startWatchdog() {
+    this._stopWatchdog();
+    this._watchdogTimer = setInterval(async () => {
+      if (!this._running || this._resetInProgress) return;
+
+      const ok = await this._probeSsh();
+      if (ok) {
+        this._watchdogFailures = 0;
+        return;
+      }
+
+      this._watchdogFailures++;
+      console.warn(
+        `[VM] Watchdog: SSH probe failed (${this._watchdogFailures}/${config.watchdogMaxFailures})`
+      );
+
+      if (this._watchdogFailures >= config.watchdogMaxFailures) {
+        console.error('[VM] Watchdog: VM appears unresponsive — triggering reset.');
+        this._stopWatchdog();
+        this.reset().catch((err) => {
+          console.error('[VM] Watchdog-triggered reset failed:', err.message);
+        });
+      }
+    }, config.watchdogIntervalMs);
+  }
+
+  /** Stop the SSH watchdog timer. */
+  _stopWatchdog() {
+    if (this._watchdogTimer) {
+      clearInterval(this._watchdogTimer);
+      this._watchdogTimer = null;
+    }
+    this._watchdogFailures = 0;
   }
 
   /** Probe SSH without opening a shell — just connect and disconnect. */
