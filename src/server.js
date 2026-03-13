@@ -279,6 +279,12 @@ function handleConnection(ws, req) {
         sendTo(ws, { type: 'vm:spare', status: vm.spareStatus });
         break;
       }
+
+      case 'spare:load': {
+        // Promote the spare to active (instant failover if spare is ready).
+        vm.reset().catch((err) => console.error('[Server] spare:load reset failed:', err.message));
+        break;
+      }
     }
   });
 

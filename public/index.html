@@ -472,8 +472,8 @@
       spareBtn.disabled = true;
       spareBtn.classList.add('booting');
     } else if (status === 'ready') {
-      spareBtn.textContent = 'Spare Ready';
-      spareBtn.disabled = true;
+      spareBtn.textContent = 'Load Spare';
+      spareBtn.disabled = false;
       spareBtn.classList.add('spare-ready');
     } else {
       spareBtn.textContent = 'Request Spare';
@@ -672,8 +672,15 @@
 
   spareBtn.addEventListener('click', () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'spare:request' }));
-    setSpareStatus('booting');  // optimistic UI update
+    if (spareBtn.classList.contains('spare-ready')) {
+      // Spare is warm — promote it to active immediately.
+      ws.send(JSON.stringify({ type: 'spare:load' }));
+      setSpareStatus('booting');  // optimistic: new spare will start booting after failover
+    } else {
+      // No spare — request one.
+      ws.send(JSON.stringify({ type: 'spare:request' }));
+      setSpareStatus('booting');  // optimistic UI update
+    }
   });
 
   // ── Start ──────────────────────────────────────────────────────────────────
