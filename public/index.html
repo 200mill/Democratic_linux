@@ -445,6 +445,7 @@
   }
 
   function requestOpenTab() {
+    console.log('[debug] requestOpenTab called', new Error().stack.split('\n')[1].trim());
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!vmReady) {
       // Show a temporary notice in the first tab or overlay.
