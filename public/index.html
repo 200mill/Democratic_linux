@@ -273,6 +273,7 @@
   let reconnectDelay  = 1000;
   let vmReady         = false;
   let activeTabId     = null;
+  let autoOpened      = false;   // guard: only auto-open initial tab once
 
   // tabId → { term, fitAddon, el (pane div), tabEl (tab bar item) }
   const tabs = new Map();
@@ -474,8 +475,11 @@
         if (msg.status === 'ready') {
           setStatus('online', 'Connected');
           tabbarNotice.style.display = 'none';
-          // If we have no tabs yet, open the first one automatically.
-          if (tabs.size === 0) requestOpenTab();
+          // Auto-open the first tab once per page load.
+          if (tabs.size === 0 && !autoOpened) {
+            autoOpened = true;
+            requestOpenTab();
+          }
         } else if (msg.status === 'resetting') {
           setStatus('resetting', 'VM resetting…');
         } else {
