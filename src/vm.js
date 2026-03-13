@@ -564,6 +564,12 @@ class VMManager extends EventEmitter {
       return;
     }
 
+    if (inst !== this._active) {
+      // Stale instance — already replaced by failover. Ignore.
+      console.log(`[VM:${inst.label}] Stale QEMU process exited — ignoring.`);
+      return;
+    }
+
     // Active VM exited.
     this._active = null;
     if (!this._running || this._resetInProgress) return;
