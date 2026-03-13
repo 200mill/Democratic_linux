@@ -513,14 +513,16 @@ class VMManager extends EventEmitter {
 
     if (!fs.existsSync(config.baseImage)) return;
 
-    // Pick the port that the current active VM is NOT using.
-    // After a failover the promoted-spare runs on sparePort (2223), so the
-    // new spare must use sshPort (2222) — and vice-versa.
-    const usedPort  = this._active ? this._active.port : null;
-    const sparePort = (usedPort === config.sparePort) ? config.sshPort : config.sparePort;
+    // Pick the port AND image that the current active VM is NOT using.
+    // After a failover the promoted-spare runs on sparePort/spareImage, so the
+    // new spare must use sshPort/workImage — and vice-versa.
+    const usedPort  = this._active ? this._active.port  : null;
+    const usedImage = this._active ? this._active.image : null;
+    const sparePort  = (usedPort  === config.sparePort)  ? config.sshPort   : config.sparePort;
+    const spareImage = (usedImage === config.spareImage) ? config.workImage  : config.spareImage;
 
     console.log('[VM:spare] Starting warm-up…');
-    this._spare = this._makeInstance('spare', config.spareImage, sparePort);
+    this._spare = this._makeInstance('spare', spareImage, sparePort);
     this._spare.launch(
       (inst, d) => this._onQemuOutput(inst, d),
       (inst, code, signal) => this._onQemuExit(inst, code, signal)
