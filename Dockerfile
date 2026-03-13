@@ -38,8 +38,9 @@ COPY public/ ./public/
 COPY scripts/ ./scripts/
 RUN chmod +x scripts/create-image.sh
 
-# Expose the web server port
+# Expose HTTP and HTTPS ports
 EXPOSE 3000
+EXPOSE 3443
 
 # vm/ directory must be mounted as a volume so the base image persists.
 VOLUME ["/app/vm"]

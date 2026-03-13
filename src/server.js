@@ -7,6 +7,10 @@
  * All connected browsers share one terminal session (broadcast model).
  * Input from any browser is forwarded to the VM's SSH PTY; output is
  * broadcast to every connected browser.
+ *
+ * The server listens on both HTTP (HTTP_PORT, default 3000) and HTTPS
+ * (HTTPS_PORT, default 3443) simultaneously when SSL_CERT + SSL_KEY are set.
+ * If TLS is not configured only the HTTP server starts.
  */
 
 'use strict';
@@ -23,7 +27,8 @@ const { isBlocked } = require('./filter');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const PORT       = process.env.PORT     || 3000;
+const HTTP_PORT  = parseInt(process.env.HTTP_PORT  || process.env.PORT || 3000, 10);
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || 3443, 10);
 const SSL_CERT   = process.env.SSL_CERT || '';   // path to TLS certificate (PEM)
 const SSL_KEY    = process.env.SSL_KEY  || '';   // path to TLS private key (PEM)
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -37,24 +42,29 @@ const OUTPUT_BUFFER_BYTES = 32 * 1024; // 32 KiB
 const app = express();
 app.use(express.static(PUBLIC_DIR));
 
-// ── HTTP / HTTPS server ───────────────────────────────────────────────────────
+// ── HTTP + HTTPS servers ──────────────────────────────────────────────────────
 
-let server;
-const useSSL = SSL_CERT && SSL_KEY;
+const httpServer  = http.createServer(app);
+
+const useSSL = !!(SSL_CERT && SSL_KEY);
+let httpsServer = null;
 
 if (useSSL) {
   const tlsOptions = {
     cert: fs.readFileSync(SSL_CERT),
     key:  fs.readFileSync(SSL_KEY),
   };
-  server = https.createServer(tlsOptions, app);
-} else {
-  server = http.createServer(app);
+  httpsServer = https.createServer(tlsOptions, app);
 }
 
-// ── WebSocket server ──────────────────────────────────────────────────────────
+// ── WebSocket servers (one per transport) ─────────────────────────────────────
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+// Both WSS instances share the same clients set and message handlers so
+// browsers connecting over ws:// or wss:// are treated identically.
+const wssHttp  = new WebSocketServer({ server: httpServer,  path: '/ws' });
+const wssHttps = useSSL
+  ? new WebSocketServer({ server: httpsServer, path: '/ws' })
+  : null;
 
 // Keep track of all connected browser clients.
 const clients = new Set();
@@ -69,7 +79,11 @@ function appendOutputBuffer(data) {
   }
 }
 
-wss.on('connection', (ws, req) => {
+function attachWss(wssInstance) { wssInstance.on('connection', handleConnection); }
+attachWss(wssHttp);
+if (wssHttps) attachWss(wssHttps);
+
+function handleConnection(ws, req) {
   const ip = req.socket.remoteAddress;
   console.log(`[WS] Client connected: ${ip}  (total: ${clients.size + 1})`);
   clients.add(ws);
@@ -116,7 +130,7 @@ wss.on('connection', (ws, req) => {
     console.error(`[WS] Client error (${ip}):`, err.message);
     clients.delete(ws);
   });
-});
+}
 
 // ── VM → browsers ─────────────────────────────────────────────────────────────
 
@@ -180,10 +194,15 @@ function broadcast(msg) {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-server.listen(PORT, () => {
-  const proto = useSSL ? 'https' : 'http';
-  console.log(`[Server] Democratic Linux running at ${proto}://localhost:${PORT}${useSSL ? '  (TLS enabled)' : ''}`);
+httpServer.listen(HTTP_PORT, () => {
+  console.log(`[Server] HTTP  → http://localhost:${HTTP_PORT}`);
 });
+
+if (httpsServer) {
+  httpsServer.listen(HTTPS_PORT, () => {
+    console.log(`[Server] HTTPS → https://localhost:${HTTPS_PORT}  (TLS enabled)`);
+  });
+}
 
 vm.start().catch((err) => {
   console.error('[Server] Failed to start VM:', err.message);

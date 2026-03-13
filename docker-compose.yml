@@ -2,7 +2,8 @@ services:
   democratic-linux:
     build: .
     ports:
-      - "${PORT:-3000}:3000"
+      - "${HTTP_PORT:-3000}:3000"
+      - "${HTTPS_PORT:-3443}:3443"
     volumes:
       - vm-data:/app/vm
       - ./certs:/app/certs:ro   # mount host cert directory (optional)
@@ -11,12 +12,13 @@ services:
     dns:
       - 192.168.253.2
     environment:
-      - PORT=3000
+      - HTTP_PORT=3000
+      - HTTPS_PORT=3443
       - QEMU_MEM=512M
       - QEMU_CPUS=1
-      # Set SSL_CERT / SSL_KEY to enable HTTPS.
-      # The entrypoint will auto-generate a self-signed cert when both are
-      # left empty and GENERATE_SELF_SIGNED_CERT=true is set.
+      # Set SSL_CERT / SSL_KEY to enable HTTPS alongside HTTP.
+      # The entrypoint will auto-generate a self-signed cert when
+      # GENERATE_SELF_SIGNED_CERT=true and the cert file doesn't exist yet.
       - SSL_CERT=${SSL_CERT:-/app/certs/cert.pem}
       - SSL_KEY=${SSL_KEY:-/app/certs/key.pem}
       - GENERATE_SELF_SIGNED_CERT=${GENERATE_SELF_SIGNED_CERT:-true}
