@@ -294,7 +294,25 @@ class VMManager extends EventEmitter {
     console.log(`[VM] Launching: ${config.qemuBin} ${args.join(' ')}`);
     this._qemuProc = spawn(config.qemuBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    this._qemuProc.stdout.on('data', (d) => process.stdout.write(`[QEMU] ${d}`));
+    const onQemuOutput = (d) => {
+      const text = d.toString();
+      process.stdout.write(`[QEMU] ${d}`);
+      // Detect guest kernel panic or I/O errors — trigger an immediate reset.
+      if (
+        this._ready && !this._resetInProgress &&
+        (text.includes('Kernel panic') || text.includes('end Kernel panic') ||
+         text.includes('kernel BUG') || text.includes('I/O error') ||
+         text.includes('EXT4-fs error') || text.includes('Buffer I/O error'))
+      ) {
+        console.error('[VM] Detected guest OS fault in QEMU output — triggering reset.');
+        this._stopWatchdog();
+        this.reset().catch((err) => {
+          console.error('[VM] Fault-triggered reset failed:', err.message);
+        });
+      }
+    };
+
+    this._qemuProc.stdout.on('data', onQemuOutput);
     this._qemuProc.stderr.on('data', (d) => process.stderr.write(`[QEMU] ${d}`));
 
     this._qemuProc.on('exit', (code, signal) => {
@@ -356,7 +374,7 @@ class VMManager extends EventEmitter {
     this._watchdogTimer = setInterval(async () => {
       if (!this._running || this._resetInProgress) return;
 
-      const ok = await this._probeSsh();
+      const ok = await this._execHealthCheck();
       if (ok) {
         this._watchdogFailures = 0;
         return;
@@ -364,7 +382,7 @@ class VMManager extends EventEmitter {
 
       this._watchdogFailures++;
       console.warn(
-        `[VM] Watchdog: SSH probe failed (${this._watchdogFailures}/${config.watchdogMaxFailures})`
+        `[VM] Watchdog: health check failed (${this._watchdogFailures}/${config.watchdogMaxFailures})`
       );
 
       if (this._watchdogFailures >= config.watchdogMaxFailures) {
@@ -396,6 +414,51 @@ class VMManager extends EventEmitter {
       };
       client.on('ready', () => done(true));
       client.on('error', () => done(false));
+      client.connect({
+        host:         '127.0.0.1',
+        port:         config.sshPort,
+        username:     config.sshUser,
+        password:     config.sshPassword,
+        hostVerifier: () => true,
+        readyTimeout: 8000,
+      });
+    });
+  }
+
+  /**
+   * Exec-based health check: connects via SSH and runs `echo ok`.
+   * Returns true only if the command executes and returns the expected output.
+   * This catches cases where SSHD is still alive in memory but the OS is broken.
+   */
+  _execHealthCheck() {
+    return new Promise((resolve) => {
+      const client = new Client();
+      let resolved = false;
+      const done = (result) => {
+        if (resolved) return;
+        resolved = true;
+        try { client.end(); } catch (_) {}
+        resolve(result);
+      };
+
+      // Hard timeout in case the exec hangs
+      const timer = setTimeout(() => done(false), 10000);
+
+      client.on('ready', () => {
+        client.exec('echo ok', (err, stream) => {
+          if (err) return done(false);
+          let output = '';
+          stream.on('data', (d) => { output += d.toString(); });
+          stream.stderr.on('data', () => {});
+          stream.on('close', () => {
+            clearTimeout(timer);
+            done(output.trim() === 'ok');
+          });
+          stream.on('error', () => { clearTimeout(timer); done(false); });
+        });
+      });
+
+      client.on('error', () => { clearTimeout(timer); done(false); });
       client.connect({
         host:         '127.0.0.1',
         port:         config.sshPort,
