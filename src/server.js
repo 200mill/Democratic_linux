@@ -27,8 +27,8 @@ const { isBlocked } = require('./filter');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const HTTP_PORT  = parseInt(process.env.HTTP_PORT  || process.env.PORT || 3000, 10);
-const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || 3443, 10);
+const HTTP_PORT  = parseInt(process.env.HTTP_PORT  || process.env.PORT || 80,  10);
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || 443, 10);
 const SSL_CERT   = process.env.SSL_CERT || '';   // path to TLS certificate (PEM)
 const SSL_KEY    = process.env.SSL_KEY  || '';   // path to TLS private key (PEM)
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
