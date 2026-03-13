@@ -20,6 +20,7 @@ const fs     = require('fs');
 const http   = require('http');
 const https  = require('https');
 const path   = require('path');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 const express = require('express');
 
@@ -117,7 +118,63 @@ function broadcastToSubscribers(tabId, msg) {
   }
 }
 
-function attachWss(wssInstance) { wssInstance.on('connection', handleConnection); }
+function sendTo(ws, msg) {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// ── Open / close tab ──────────────────────────────────────────────────────────
+
+async function openTab(id, title) {
+  if (tabRegistry.has(id)) return tabRegistry.get(id);
+
+  const entry = makeTabEntry(id, title || `Tab ${tabRegistry.size + 1}`);
+  tabRegistry.set(id, entry);
+
+  broadcast({ type: 'tab:list', tabs: tabList() });
+
+  if (!vm.isReady) return entry;
+
+  try {
+    const session = await vm.openTab(id);
+    entry.session = session;
+
+    session.on('data', (data) => {
+      appendTabBuffer(entry, data);
+      broadcastToSubscribers(id, { type: 'output', tabId: id, data: data.toString('base64') });
+    });
+
+    session.on('close', () => {
+      if (tabRegistry.has(id)) {
+        broadcastToSubscribers(id, {
+          type: 'info', tabId: id,
+          text: '\r\n\x1b[1;33m[Tab closed by remote]\x1b[0m\r\n',
+        });
+        closeTab(id);
+      }
+    });
+  } catch (err) {
+    console.error(`[Server] Failed to open tab ${id}:`, err.message);
+    broadcastToSubscribers(id, {
+      type: 'info', tabId: id,
+      text: `\r\n\x1b[1;31m[Error] Could not open shell: ${err.message}\x1b[0m\r\n`,
+    });
+  }
+
+  return entry;
+}
+
+function closeTab(id) {
+  const entry = tabRegistry.get(id);
+  if (!entry) return;
+  if (entry.session) {
+    try { entry.session.close(); } catch (_) {}
+    entry.session = null;
+  }
+  tabRegistry.delete(id);
+  broadcast({ type: 'tab:closed', tabId: id, tabs: tabList() });
+}
+
+// ── WebSocket attachment ──────────────────────────────────────────────────────
 attachWss(wssHttp);
 if (wssHttps) attachWss(wssHttps);
 
