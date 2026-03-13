@@ -175,8 +175,8 @@ function closeTab(id) {
 }
 
 // ── WebSocket attachment ──────────────────────────────────────────────────────
-attachWss(wssHttp);
-if (wssHttps) attachWss(wssHttps);
+
+function attachWss(wssInstance) { wssInstance.on('connection', handleConnection); }
 
 function handleConnection(ws, req) {
   const ip = req.socket.remoteAddress;
@@ -291,6 +291,9 @@ function handleConnection(ws, req) {
     }
   });
 }
+
+attachWss(wssHttp);
+if (wssHttps) attachWss(wssHttps);
 
 // ── VM events ─────────────────────────────────────────────────────────────────
 
