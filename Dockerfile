@@ -5,8 +5,10 @@ FROM node:20-slim
 # - fdisk: provides sfdisk for partitioning loop devices
 # - e2fsprogs: provides mkfs.ext4
 # - mount: mount(8) and umount(8)
-# - grub-pc: provides grub-install (host-side, writes MBR + /boot/grub)
-# - grub-pc-bin/grub-common: GRUB i386-pc modules and shared files
+# - grub-pc-bin: provides grub-mkimage + grub-bios-setup (host-side tools only)
+# - grub-common: shared GRUB files (grub-mkimage dependency)
+# NOTE: grub-pc (the bootloader target package) is intentionally excluded —
+#       it is only needed inside the VM image, where debootstrap installs it.
 # - build-essential/python3: needed for ssh2's optional native module cpu-features
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -16,7 +18,6 @@ RUN apt-get update && \
         ca-certificates \
         openssl \
         debootstrap \
-        grub-pc \
         grub-pc-bin \
         grub-common \
         build-essential \
