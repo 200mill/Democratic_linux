@@ -40,17 +40,26 @@
       width: 12px; height: 12px;
       border-radius: 50%;
       background: #3a3a3a;
+      flex-shrink: 0;
       transition: background 0.3s;
     }
-    #topbar .dot.online  { background: #4caf50; box-shadow: 0 0 6px #4caf5088; }
-    #topbar .dot.offline { background: #f44336; box-shadow: 0 0 6px #f4433688; }
+    #topbar .dot.online    { background: #4caf50; box-shadow: 0 0 6px #4caf5088; }
+    #topbar .dot.offline   { background: #f44336; box-shadow: 0 0 6px #f4433688; }
     #topbar .dot.resetting { background: #ff9800; box-shadow: 0 0 6px #ff980088; }
+    #topbar .dot.booting   { background: #ff9800; box-shadow: 0 0 6px #ff980088; }
 
     #topbar h1 {
       font-size: 14px;
       font-weight: 700;
       color: #e0e0e0;
       letter-spacing: 0.05em;
+      flex-shrink: 0;
+    }
+
+    #status-text {
+      font-size: 11px;
+      color: #888;
+      flex-shrink: 0;
     }
 
     #topbar .badge {
@@ -59,19 +68,116 @@
       color: #888;
     }
 
-    #status-text {
-      font-size: 11px;
-      color: #888;
+    /* ── Tab bar ── */
+    #tabbar {
+      display: flex;
+      align-items: stretch;
+      background: #111111;
+      border-bottom: 1px solid #2a2a2a;
+      flex-shrink: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: #333 transparent;
+      min-height: 34px;
     }
 
-    /* ── Terminal wrapper ── */
-    #terminal-wrapper {
+    #tabbar::-webkit-scrollbar       { height: 4px; }
+    #tabbar::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+    .tab-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 14px;
+      font-size: 12px;
+      color: #888;
+      cursor: pointer;
+      border-right: 1px solid #2a2a2a;
+      white-space: nowrap;
+      position: relative;
+      transition: color 0.15s, background 0.15s;
+      min-width: 80px;
+      user-select: none;
+    }
+
+    .tab-item:hover {
+      background: #1a1a1a;
+      color: #bbb;
+    }
+
+    .tab-item.active {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      border-top: 2px solid #4caf50;
+    }
+
+    .tab-item .tab-title {
       flex: 1;
       overflow: hidden;
-      padding: 4px 4px 4px 4px;
+      text-overflow: ellipsis;
+      max-width: 120px;
     }
 
-    #terminal {
+    .tab-item .tab-close {
+      font-size: 14px;
+      line-height: 1;
+      color: #555;
+      border-radius: 3px;
+      padding: 1px 3px;
+      transition: color 0.15s, background 0.15s;
+      flex-shrink: 0;
+    }
+    .tab-item .tab-close:hover {
+      color: #f44336;
+      background: #2a1a1a;
+    }
+
+    /* + new tab button */
+    #tab-new {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 12px;
+      font-size: 18px;
+      color: #555;
+      cursor: pointer;
+      transition: color 0.15s, background 0.15s;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    #tab-new:hover {
+      color: #4caf50;
+      background: #1a1a1a;
+    }
+
+    /* VM-booting notice shown inside the tab bar when no tabs exist yet */
+    #tabbar-notice {
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      font-size: 11px;
+      color: #555;
+      pointer-events: none;
+    }
+
+    /* ── Terminal stack ── */
+    #terminal-stack {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .terminal-pane {
+      position: absolute;
+      inset: 0;
+      padding: 4px;
+      display: none;
+    }
+    .terminal-pane.active {
+      display: block;
+    }
+    .terminal-pane > div {
       width: 100%;
       height: 100%;
     }
@@ -122,76 +228,297 @@
     <span class="badge" id="badge"></span>
   </div>
 
-  <!-- xterm.js terminal -->
-  <div id="terminal-wrapper">
-    <div id="terminal"></div>
+  <!-- Tab bar -->
+  <div id="tabbar">
+    <span id="tabbar-notice">Waiting for VM…</span>
+    <div id="tab-new" title="New tab (Ctrl+T)">+</div>
   </div>
+
+  <!-- Terminal pane container -->
+  <div id="terminal-stack"></div>
 
 <script>
 (function () {
   'use strict';
 
-  // ── Terminal setup ─────────────────────────────────────────────────────────
+  // ── Shared xterm.js theme / font config ────────────────────────────────────
 
-  const term = new Terminal({
-    cursorBlink: true,
-    fontSize: 14,
-    fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-    theme: {
-      background:   '#0d0d0d',
-      foreground:   '#e0e0e0',
-      cursor:       '#e0e0e0',
-      selectionBackground: '#ffffff30',
-      black:        '#1e1e1e',
-      red:          '#f44336',
-      green:        '#4caf50',
-      yellow:       '#ffeb3b',
-      blue:         '#2196f3',
-      magenta:      '#9c27b0',
-      cyan:         '#00bcd4',
-      white:        '#e0e0e0',
-      brightBlack:  '#555555',
-      brightRed:    '#ef9a9a',
-      brightGreen:  '#a5d6a7',
-      brightYellow: '#fff59d',
-      brightBlue:   '#90caf9',
-      brightMagenta:'#ce93d8',
-      brightCyan:   '#80deea',
-      brightWhite:  '#ffffff',
-    },
-    scrollback: 5000,
-    allowProposedApi: true,
-  });
+  const TERM_THEME = {
+    background:        '#0d0d0d',
+    foreground:        '#e0e0e0',
+    cursor:            '#e0e0e0',
+    selectionBackground: '#ffffff30',
+    black:             '#1e1e1e',
+    red:               '#f44336',
+    green:             '#4caf50',
+    yellow:            '#ffeb3b',
+    blue:              '#2196f3',
+    magenta:           '#9c27b0',
+    cyan:              '#00bcd4',
+    white:             '#e0e0e0',
+    brightBlack:       '#555555',
+    brightRed:         '#ef9a9a',
+    brightGreen:       '#a5d6a7',
+    brightYellow:      '#fff59d',
+    brightBlue:        '#90caf9',
+    brightMagenta:     '#ce93d8',
+    brightCyan:        '#80deea',
+    brightWhite:       '#ffffff',
+  };
 
-  const fitAddon      = new FitAddon.FitAddon();
-  const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-  term.loadAddon(fitAddon);
-  term.loadAddon(webLinksAddon);
-  term.open(document.getElementById('terminal'));
-  fitAddon.fit();
+  // ── State ──────────────────────────────────────────────────────────────────
 
-  window.addEventListener('resize', () => fitAddon.fit());
+  let ws              = null;
+  let reconnectTimer  = null;
+  let reconnectDelay  = 1000;
+  let vmReady         = false;
+  let activeTabId     = null;
+
+  // tabId → { term, fitAddon, el (pane div), tabEl (tab bar item) }
+  const tabs = new Map();
 
   // ── UI helpers ─────────────────────────────────────────────────────────────
 
   const dot        = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
-  const badge      = document.getElementById('badge');
   const overlay    = document.getElementById('overlay');
   const overlayTxt = document.getElementById('overlay-text');
+  const tabbar     = document.getElementById('tabbar');
+  const tabNew     = document.getElementById('tab-new');
+  const tabbarNotice = document.getElementById('tabbar-notice');
+  const stack      = document.getElementById('terminal-stack');
 
   function setStatus(state, text) {
-    dot.className = 'dot ' + state;
+    dot.className    = 'dot ' + state;
     statusText.textContent = text;
   }
 
-  function hideOverlay() {
-    overlay.classList.add('hidden');
+  function hideOverlay() { overlay.classList.add('hidden'); }
+  function showOverlay(t) { overlayTxt.textContent = t; overlay.classList.remove('hidden'); }
+
+  // ── Tab management ─────────────────────────────────────────────────────────
+
+  function createLocalTab(tabId, title) {
+    if (tabs.has(tabId)) return tabs.get(tabId);
+
+    // ── terminal pane ──
+    const pane = document.createElement('div');
+    pane.className = 'terminal-pane';
+    const termDiv = document.createElement('div');
+    pane.appendChild(termDiv);
+    stack.appendChild(pane);
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+      theme: TERM_THEME,
+      scrollback: 5000,
+      allowProposedApi: true,
+    });
+
+    const fitAddon      = new FitAddon.FitAddon();
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(webLinksAddon);
+    term.open(termDiv);
+    fitAddon.fit();
+
+    // ── tab bar item ──
+    const tabEl = document.createElement('div');
+    tabEl.className = 'tab-item';
+    tabEl.dataset.tabId = tabId;
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'tab-title';
+    titleSpan.textContent = title || tabId;
+
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'tab-close';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Close tab';
+
+    tabEl.appendChild(titleSpan);
+    tabEl.appendChild(closeBtn);
+
+    // Insert before the + button
+    tabbar.insertBefore(tabEl, tabNew);
+
+    const entry = { term, fitAddon, pane, tabEl, titleSpan, tabId };
+    tabs.set(tabId, entry);
+
+    // ── events ──
+    tabEl.addEventListener('click', (e) => {
+      if (e.target === closeBtn) return;
+      selectTab(tabId);
+    });
+
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      requestCloseTab(tabId);
+    });
+
+    term.onData((data) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'input', tabId, data }));
+    });
+
+    term.onResize(({ cols, rows }) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'resize', tabId, cols, rows }));
+    });
+
+    return entry;
   }
 
-  function showOverlay(text) {
-    overlayTxt.textContent = text;
-    overlay.classList.remove('hidden');
+  function selectTab(tabId) {
+    if (activeTabId === tabId) return;
+
+    // Deactivate previous tab.
+    if (activeTabId && tabs.has(activeTabId)) {
+      const prev = tabs.get(activeTabId);
+      prev.pane.classList.remove('active');
+      prev.tabEl.classList.remove('active');
+    }
+
+    activeTabId = tabId;
+    const entry = tabs.get(tabId);
+    if (!entry) return;
+
+    entry.pane.classList.add('active');
+    entry.tabEl.classList.add('active');
+    entry.tabEl.scrollIntoView({ inline: 'nearest' });
+
+    // Fit and focus the newly-active terminal.
+    requestAnimationFrame(() => {
+      entry.fitAddon.fit();
+      entry.term.focus();
+      // Tell the server this client is now watching this tab.
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'tab:select', tabId }));
+        ws.send(JSON.stringify({
+          type: 'resize',
+          tabId,
+          cols: entry.term.cols,
+          rows: entry.term.rows,
+        }));
+      }
+    });
+  }
+
+  function removeLocalTab(tabId) {
+    const entry = tabs.get(tabId);
+    if (!entry) return;
+
+    entry.pane.remove();
+    entry.tabEl.remove();
+    entry.term.dispose();
+    tabs.delete(tabId);
+
+    if (activeTabId === tabId) {
+      activeTabId = null;
+      // Activate the last remaining tab, if any.
+      const remaining = Array.from(tabs.keys());
+      if (remaining.length > 0) {
+        selectTab(remaining[remaining.length - 1]);
+      }
+    }
+
+    updateNotice();
+  }
+
+  function updateNotice() {
+    tabbarNotice.style.display = (tabs.size === 0 && !vmReady) ? '' : 'none';
+  }
+
+  // ── Request open / close tab (sends to server) ─────────────────────────────
+
+  function requestOpenTab() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!vmReady) {
+      // Show a temporary notice in the first tab or overlay.
+      return;
+    }
+    const tabId = crypto.randomUUID();
+    // Optimistically create the local tab immediately so the user sees feedback.
+    createLocalTab(tabId, `Tab ${tabs.size + 1}`);
+    selectTab(tabId);
+    updateNotice();
+    ws.send(JSON.stringify({ type: 'tab:open', tabId }));
+  }
+
+  function requestCloseTab(tabId) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'tab:close', tabId }));
+    // Remove locally immediately for snappy UX.
+    removeLocalTab(tabId);
+  }
+
+  // ── Handle server → browser messages ──────────────────────────────────────
+
+  function handleMessage(msg) {
+    switch (msg.type) {
+
+      case 'vm:status': {
+        vmReady = (msg.status === 'ready');
+        if (msg.status === 'ready') {
+          setStatus('online', 'Connected');
+          tabbarNotice.style.display = 'none';
+          // If we have no tabs yet, open the first one automatically.
+          if (tabs.size === 0) requestOpenTab();
+        } else if (msg.status === 'resetting') {
+          setStatus('resetting', 'VM resetting…');
+        } else {
+          setStatus('booting', 'VM booting…');
+        }
+        break;
+      }
+
+      case 'tab:list': {
+        // Sync tab titles for any existing tabs.
+        if (Array.isArray(msg.tabs)) {
+          for (const { id, title } of msg.tabs) {
+            if (tabs.has(id)) {
+              tabs.get(id).titleSpan.textContent = title;
+            }
+          }
+        }
+        break;
+      }
+
+      case 'tab:opened': {
+        // Server confirmed a tab opened — update title if needed.
+        const entry = tabs.get(msg.tabId);
+        if (entry && msg.title) entry.titleSpan.textContent = msg.title;
+        break;
+      }
+
+      case 'tab:closed': {
+        removeLocalTab(msg.tabId);
+        break;
+      }
+
+      case 'output': {
+        const entry = tabs.get(msg.tabId);
+        if (!entry) break;
+        const raw = atob(msg.data);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        entry.term.write(bytes);
+        break;
+      }
+
+      case 'info': {
+        if (msg.tabId) {
+          const entry = tabs.get(msg.tabId);
+          if (entry) entry.term.write(msg.text);
+        } else {
+          // Global info — write to all tabs.
+          for (const { term } of tabs.values()) term.write(msg.text);
+        }
+        break;
+      }
+    }
   }
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
@@ -199,35 +526,23 @@
   const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') +
                   location.host + '/ws';
 
-  let ws = null;
-  let reconnectTimer = null;
-  let reconnectDelay = 1000;
-
   function connect() {
     setStatus('offline', 'Connecting…');
     ws = new WebSocket(WS_URL);
 
     ws.addEventListener('open', () => {
       reconnectDelay = 1000;
-      setStatus('online', 'Connected');
       hideOverlay();
-      // Send initial terminal size.
-      sendResize();
+      // Re-subscribe to all existing tabs after reconnect.
+      for (const tabId of tabs.keys()) {
+        ws.send(JSON.stringify({ type: 'tab:select', tabId }));
+      }
     });
 
     ws.addEventListener('message', (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
-
-      if (msg.type === 'output') {
-        // Base64-encoded bytes from the VM.
-        const raw = atob(msg.data);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        term.write(bytes);
-      } else if (msg.type === 'info') {
-        term.write(msg.text);
-      }
+      handleMessage(msg);
     });
 
     ws.addEventListener('close', () => {
@@ -237,7 +552,7 @@
     });
 
     ws.addEventListener('error', () => {
-      // 'close' will fire right after, so we just let that handler deal with it.
+      // 'close' fires right after.
     });
   }
 
@@ -249,28 +564,45 @@
     }, reconnectDelay);
   }
 
-  // ── Input ──────────────────────────────────────────────────────────────────
+  // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
-  term.onData((data) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: 'input', data }));
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+T → new tab
+    if (e.ctrlKey && e.key === 't') {
+      e.preventDefault();
+      requestOpenTab();
+    }
+    // Ctrl+W → close active tab
+    if (e.ctrlKey && e.key === 'w') {
+      e.preventDefault();
+      if (activeTabId) requestCloseTab(activeTabId);
+    }
+    // Ctrl+Tab → next tab
+    if (e.ctrlKey && e.key === 'Tab') {
+      e.preventDefault();
+      const ids = Array.from(tabs.keys());
+      if (ids.length < 2) return;
+      const idx = ids.indexOf(activeTabId);
+      selectTab(ids[(idx + 1) % ids.length]);
+    }
   });
 
-  // ── Resize ─────────────────────────────────────────────────────────────────
+  // ── Window resize ──────────────────────────────────────────────────────────
 
-  term.onResize(({ cols, rows }) => sendResize(cols, rows));
+  window.addEventListener('resize', () => {
+    for (const [tabId, entry] of tabs.entries()) {
+      if (tabId === activeTabId) entry.fitAddon.fit();
+    }
+  });
 
-  function sendResize(cols, rows) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const c = cols || term.cols;
-    const r = rows || term.rows;
-    ws.send(JSON.stringify({ type: 'resize', cols: c, rows: r }));
-  }
+  // ── Tab-new button ─────────────────────────────────────────────────────────
+
+  tabNew.addEventListener('click', requestOpenTab);
 
   // ── Start ──────────────────────────────────────────────────────────────────
 
+  updateNotice();
   connect();
-  term.focus();
 
 })();
 </script>
