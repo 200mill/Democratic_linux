@@ -6,7 +6,7 @@ services:
       - "${HTTPS_PORT:-443}:443"
     volumes:
       - vm-data:/app/vm
-      - ./certs:/app/certs:ro   # mount host cert directory (optional)
+      - ./certs:/app/certs    # writable — needed for auto-generated self-signed cert
     privileged: true
     restart: on-failure:3
     dns:
@@ -16,12 +16,12 @@ services:
       - HTTPS_PORT=443
       - QEMU_MEM=512M
       - QEMU_CPUS=1
-      # Set SSL_CERT / SSL_KEY to enable HTTPS alongside HTTP.
-      # The entrypoint will auto-generate a self-signed cert when
-      # GENERATE_SELF_SIGNED_CERT=true and the cert file doesn't exist yet.
-      - SSL_CERT=${SSL_CERT:-/app/certs/cert.pem}
-      - SSL_KEY=${SSL_KEY:-/app/certs/key.pem}
-      - GENERATE_SELF_SIGNED_CERT=${GENERATE_SELF_SIGNED_CERT:-true}
+      # SSL is opt-in. To enable HTTPS set SSL_CERT and SSL_KEY to PEM file paths
+      # and optionally set GENERATE_SELF_SIGNED_CERT=true to auto-generate a cert.
+      # Example:
+      #   SSL_CERT=/app/certs/cert.pem
+      #   SSL_KEY=/app/certs/key.pem
+      #   GENERATE_SELF_SIGNED_CERT=true
 
 volumes:
   vm-data:

@@ -226,7 +226,12 @@ echo "[create-image] grub-mkimage done."
 # --directory: where to find boot.img and core.img
 # $LOOP_WHOLE:  the raw loop device for the whole disk
 
-grub-bios-setup \
+# grub-bios-setup is not on $PATH when installed via grub-pc-bin;
+# it lives in /usr/lib/grub/.
+GRUB_BIOS_SETUP="$(command -v grub-bios-setup 2>/dev/null \
+  || echo /usr/lib/grub/grub-bios-setup)"
+
+"$GRUB_BIOS_SETUP" \
   --directory /mnt/boot/grub/i386-pc \
   --skip-fs-probe \
   "$LOOP_WHOLE"
