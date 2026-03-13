@@ -30,6 +30,8 @@
  *   vm.on('ready', ()=>{})      – fired when SSH first becomes available
  *   vm.on('reset', ()=>{})      – fired just before a VM restart
  *   vm.on('error', (err)=>{})   – non-fatal error notification
+ *   vm.on('spare', (s)=>{})     – fired when spare state changes; s = 'booting'|'ready'|'none'
+ *   vm.requestSpare()           – manually trigger spare warm-up (no-op if one already exists)
  *
  * Public API (TabSession)
  * ───────────────────────
@@ -330,6 +332,12 @@ class VMManager extends EventEmitter {
     return !!(this._active && this._active.ready);
   }
 
+  /** 'none' | 'booting' | 'ready' */
+  get spareStatus() {
+    if (!this._spare) return 'none';
+    return this._spare.ready ? 'ready' : 'booting';
+  }
+
   // ── Public API ──────────────────────────────────────────────────────────
 
   async start() {
@@ -375,6 +383,16 @@ class VMManager extends EventEmitter {
   }
 
   /**
+   * Manually request a spare VM warm-up.
+   * No-op if a spare is already booting or ready, or if the VM is not running.
+   */
+  requestSpare() {
+    if (!this._running) return;
+    if (this._spare) return;  // already booting or ready
+    this._bootSpare();
+  }
+
+  /**
    * Reset: promote the spare if it is ready, otherwise cold-boot.
    * This is the same entry point used by the watchdog, exit handler,
    * and the public API (server.js can call vm.reset() directly).
@@ -397,6 +415,7 @@ class VMManager extends EventEmitter {
       this._active = this._spare;
       this._active.label = 'active';
       this._spare = null;
+      this.emit('spare', 'none');
 
       this._resetInProgress = false;
       this._watchdogFailures = 0;
@@ -417,6 +436,7 @@ class VMManager extends EventEmitter {
           this._active = this._spare;
           this._active.label = 'active';
           this._spare = null;
+          this.emit('spare', 'none');
 
           this._resetInProgress = false;
           this._watchdogFailures = 0;
@@ -527,15 +547,18 @@ class VMManager extends EventEmitter {
       (inst, d) => this._onQemuOutput(inst, d),
       (inst, code, signal) => this._onQemuExit(inst, code, signal)
     );
+    this.emit('spare', 'booting');
 
     const ok = await this._spare.waitForSsh(() => !this._running || this._spare === null);
     if (ok && this._spare) {
       this._spare.ready = true;
       console.log('[VM:spare] SSH is ready — spare is warm and waiting.');
+      this.emit('spare', 'ready');
     } else if (this._spare) {
       console.warn('[VM:spare] SSH timed out — spare will not be available for next reset.');
       this._spare.kill();
       this._spare = null;
+      this.emit('spare', 'none');
     }
   }
 
@@ -568,6 +591,7 @@ class VMManager extends EventEmitter {
       // Spare died on its own — clear the slot and re-warm if we're still running.
       console.warn('[VM:spare] Spare QEMU exited unexpectedly.');
       this._spare = null;
+      this.emit('spare', 'none');
       if (this._running && !this._resetInProgress) this._bootSpare();
       return;
     }

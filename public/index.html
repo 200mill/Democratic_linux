@@ -68,6 +68,36 @@
       color: #888;
     }
 
+    #spare-btn {
+      font-size: 11px;
+      font-family: inherit;
+      padding: 3px 10px;
+      border-radius: 4px;
+      border: 1px solid #3a3a3a;
+      background: #1e1e1e;
+      color: #aaa;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+    }
+    #spare-btn:hover:not(:disabled) {
+      background: #2a2a2a;
+      color: #e0e0e0;
+      border-color: #555;
+    }
+    #spare-btn:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+    #spare-btn.booting {
+      color: #ff9800;
+      border-color: #ff980066;
+    }
+    #spare-btn.spare-ready {
+      color: #4caf50;
+      border-color: #4caf5066;
+    }
+
     /* ── Tab bar ── */
     #tabbar {
       display: flex;
@@ -226,6 +256,7 @@
     <h1>Democratic Linux</h1>
     <span id="status-text">Connecting…</span>
     <span class="badge" id="badge"></span>
+    <button id="spare-btn" title="Warm up a spare VM in the background">Request Spare</button>
   </div>
 
   <!-- Tab bar -->
@@ -289,6 +320,7 @@
   const tabNew     = document.getElementById('tab-new');
   const tabbarNotice = document.getElementById('tabbar-notice');
   const stack      = document.getElementById('terminal-stack');
+  const spareBtn   = document.getElementById('spare-btn');
 
   function setStatus(state, text) {
     dot.className    = 'dot ' + state;
@@ -433,6 +465,22 @@
     tabbarNotice.style.display = (tabs.size === 0 && !vmReady) ? '' : 'none';
   }
 
+  function setSpareStatus(status) {
+    spareBtn.className = '';
+    if (status === 'booting') {
+      spareBtn.textContent = 'Spare Booting…';
+      spareBtn.disabled = true;
+      spareBtn.classList.add('booting');
+    } else if (status === 'ready') {
+      spareBtn.textContent = 'Spare Ready';
+      spareBtn.disabled = true;
+      spareBtn.classList.add('spare-ready');
+    } else {
+      spareBtn.textContent = 'Request Spare';
+      spareBtn.disabled = false;
+    }
+  }
+
   // ── Request open / close tab (sends to server) ─────────────────────────────
 
   function generateId() {
@@ -536,6 +584,11 @@
         }
         break;
       }
+
+      case 'vm:spare': {
+        setSpareStatus(msg.status);
+        break;
+      }
     }
   }
 
@@ -616,6 +669,12 @@
   // ── Tab-new button ─────────────────────────────────────────────────────────
 
   tabNew.addEventListener('click', requestOpenTab);
+
+  spareBtn.addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'spare:request' }));
+    setSpareStatus('booting');  // optimistic UI update
+  });
 
   // ── Start ──────────────────────────────────────────────────────────────────
 
