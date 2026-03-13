@@ -274,6 +274,7 @@
   let vmReady         = false;
   let activeTabId     = null;
   let autoOpened      = false;   // guard: only auto-open initial tab once
+  let openTabPending  = false;   // debounce: prevent double-open from duplicate events
 
   // tabId → { term, fitAddon, el (pane div), tabEl (tab bar item) }
   const tabs = new Map();
@@ -446,6 +447,9 @@
 
   function requestOpenTab() {
     console.log('[debug] requestOpenTab called', new Error().stack.split('\n')[1].trim());
+    if (openTabPending) return;   // debounce duplicate events
+    openTabPending = true;
+    setTimeout(() => { openTabPending = false; }, 100);
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!vmReady) {
       // Show a temporary notice in the first tab or overlay.
