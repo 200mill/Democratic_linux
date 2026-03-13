@@ -446,7 +446,6 @@
   }
 
   function requestOpenTab() {
-    console.log('[debug] requestOpenTab called', new Error().stack.split('\n')[1].trim());
     if (openTabPending) return;   // debounce duplicate events
     openTabPending = true;
     setTimeout(() => { openTabPending = false; }, 100);
