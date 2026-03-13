@@ -240,11 +240,13 @@ class VMManager extends EventEmitter {
   // ── Internal helpers ─────────────────────────────────────────────────────
 
   async _boot() {
-    this._prepareImage();
+    const ready = this._prepareImage();
+    if (!ready) return;   // base image missing — do not attempt to launch QEMU
     this._launchQemu();
     await this._waitForSSH();
   }
 
+  /** Returns true if the working image was prepared successfully, false otherwise. */
   _prepareImage() {
     const vmDir = path.dirname(config.workImage);
     if (!fs.existsSync(vmDir)) fs.mkdirSync(vmDir, { recursive: true });
@@ -254,7 +256,8 @@ class VMManager extends EventEmitter {
         `Base image not found: ${config.baseImage}\n` +
         `Run  scripts/create-image.sh  to create it first.`
       ));
-      return;
+      this._running = false;   // stop the restart loop — there is nothing to boot
+      return false;
     }
 
     try {
@@ -265,6 +268,7 @@ class VMManager extends EventEmitter {
       fs.copyFileSync(config.baseImage, config.workImage);
     }
     console.log('[VM] Prepared fresh working image.');
+    return true;
   }
 
   _launchQemu() {
@@ -292,6 +296,11 @@ class VMManager extends EventEmitter {
       this._closeAllTabs();
 
       if (this._running && !this._resetInProgress) {
+        if (!fs.existsSync(config.baseImage)) {
+          console.error('[VM] Base image missing — not restarting. Run scripts/create-image.sh first.');
+          this._running = false;
+          return;
+        }
         console.log(`[VM] Scheduling automatic restart in ${config.restartDelayMs} ms…`);
         this.emit('reset');
         setTimeout(() => this._boot(), config.restartDelayMs);
