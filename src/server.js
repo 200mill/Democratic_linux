@@ -189,6 +189,7 @@ function handleConnection(ws, req) {
     status: vm.isReady ? 'ready' : 'booting',
   });
   sendTo(ws, { type: 'tab:list', tabs: tabList() });
+  sendTo(ws, { type: 'vm:spare', status: vm.spareStatus });
 
   ws.on('message', (raw) => {
     let msg;
@@ -271,6 +272,19 @@ function handleConnection(ws, req) {
         );
         break;
       }
+
+      case 'spare:request': {
+        vm.requestSpare();
+        // Immediately echo current spare status back to the requester.
+        sendTo(ws, { type: 'vm:spare', status: vm.spareStatus });
+        break;
+      }
+
+      case 'spare:load': {
+        // Promote the spare to active (instant failover if spare is ready).
+        vm.reset().catch((err) => console.error('[Server] spare:load reset failed:', err.message));
+        break;
+      }
     }
   });
 
@@ -344,6 +358,10 @@ vm.on('error', (err) => {
     type: 'info',
     text: `\r\n\x1b[1;31m[VM error] ${err.message}\x1b[0m\r\n`,
   });
+});
+
+vm.on('spare', (status) => {
+  broadcast({ type: 'vm:spare', status });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
