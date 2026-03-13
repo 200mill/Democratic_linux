@@ -5,37 +5,21 @@
  * ────────────
  *   Browser  ──WS──►  server.js  ──SSH PTY (per tab)──►  QEMU VM
  *
- * Shared VM, independent tabs
- * ───────────────────────────
- *   Every browser client has its own set of tabs. Each tab is an independent
- *   SSH PTY session into the shared VM, so users have separate shell
- *   histories / processes but share the same OS and filesystem.
+ * All connected browsers share one terminal session (broadcast model).
+ * Input from any browser is forwarded to the VM's SSH PTY; output is
+ * broadcast to every connected browser.
  *
- *   All output from a tab is broadcast to EVERY connected browser client
- *   that has subscribed to that tab — this keeps the "democratic" shared
- *   view: multiple browsers watching the same tab see the same output.
- *
- * Message protocol (browser → server)
- * ─────────────────────────────────────
- *   { type: 'tab:open',   tabId }                 – open a new tab
- *   { type: 'tab:close',  tabId }                 – close a tab
- *   { type: 'tab:select', tabId }                 – subscribe to a tab's output
- *   { type: 'input',      tabId, data }            – send input to a tab
- *   { type: 'resize',     tabId, cols, rows }      – resize a tab's PTY
- *
- * Message protocol (server → browser)
- * ─────────────────────────────────────
- *   { type: 'output',     tabId, data }            – base64 bytes from a tab
- *   { type: 'info',       tabId, text }            – info/error banner text
- *   { type: 'tab:list',   tabs: [{id, title}] }    – current tab list
- *   { type: 'vm:status',  status: 'booting'|'ready'|'resetting' }
+ * The server listens on both HTTP (HTTP_PORT, default 3000) and HTTPS
+ * (HTTPS_PORT, default 3443) simultaneously when SSL_CERT + SSL_KEY are set.
+ * If TLS is not configured only the HTTP server starts.
  */
 
 'use strict';
 
-const http = require('http');
-const path = require('path');
-const crypto = require('crypto');
+const fs     = require('fs');
+const http   = require('http');
+const https  = require('https');
+const path   = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
 const express = require('express');
 
@@ -44,7 +28,10 @@ const { isBlocked } = require('./filter');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const PORT       = process.env.PORT || 3000;
+const HTTP_PORT  = parseInt(process.env.HTTP_PORT  || process.env.PORT || 80,  10);
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || 443, 10);
+const SSL_CERT   = process.env.SSL_CERT || '';   // path to TLS certificate (PEM)
+const SSL_KEY    = process.env.SSL_KEY  || '';   // path to TLS private key (PEM)
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
 // Per-tab output replay buffer size (bytes sent to a newly-subscribing client).
@@ -55,13 +42,29 @@ const OUTPUT_BUFFER_BYTES = 32 * 1024; // 32 KiB
 const app = express();
 app.use(express.static(PUBLIC_DIR));
 
-// ── HTTP server ───────────────────────────────────────────────────────────────
+// ── HTTP + HTTPS servers ──────────────────────────────────────────────────────
 
-const server = http.createServer(app);
+const httpServer  = http.createServer(app);
 
-// ── WebSocket server ──────────────────────────────────────────────────────────
+const useSSL = !!(SSL_CERT && SSL_KEY);
+let httpsServer = null;
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+if (useSSL) {
+  const tlsOptions = {
+    cert: fs.readFileSync(SSL_CERT),
+    key:  fs.readFileSync(SSL_KEY),
+  };
+  httpsServer = https.createServer(tlsOptions, app);
+}
+
+// ── WebSocket servers (one per transport) ─────────────────────────────────────
+
+// Both WSS instances share the same clients set and message handlers so
+// browsers connecting over ws:// or wss:// are treated identically.
+const wssHttp  = new WebSocketServer({ server: httpServer,  path: '/ws' });
+const wssHttps = useSSL
+  ? new WebSocketServer({ server: httpsServer, path: '/ws' })
+  : null;
 
 // All connected browser WebSocket clients.
 const clients = new Set();
@@ -114,71 +117,11 @@ function broadcastToSubscribers(tabId, msg) {
   }
 }
 
-function sendTo(ws, msg) {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-}
+function attachWss(wssInstance) { wssInstance.on('connection', handleConnection); }
+attachWss(wssHttp);
+if (wssHttps) attachWss(wssHttps);
 
-// ── Open a tab (create SSH session) ──────────────────────────────────────────
-
-async function openTab(id, title) {
-  if (tabRegistry.has(id)) return tabRegistry.get(id);
-
-  const entry = makeTabEntry(id, title || `Tab ${tabRegistry.size + 1}`);
-  tabRegistry.set(id, entry);
-
-  // Notify everyone about the new tab list immediately.
-  broadcast({ type: 'tab:list', tabs: tabList() });
-
-  if (!vm.isReady) {
-    // VM still booting — session will be opened once 'ready' fires.
-    return entry;
-  }
-
-  try {
-    const session = await vm.openTab(id);
-    entry.session = session;
-
-    session.on('data', (data) => {
-      appendTabBuffer(entry, data);
-      broadcastToSubscribers(id, { type: 'output', tabId: id, data: data.toString('base64') });
-    });
-
-    session.on('close', () => {
-      if (tabRegistry.has(id)) {
-        broadcastToSubscribers(id, {
-          type: 'info',
-          tabId: id,
-          text: '\r\n\x1b[1;33m[Tab closed by remote]\x1b[0m\r\n',
-        });
-        closeTab(id);
-      }
-    });
-  } catch (err) {
-    console.error(`[Server] Failed to open tab ${id}:`, err.message);
-    broadcastToSubscribers(id, {
-      type: 'info',
-      tabId: id,
-      text: `\r\n\x1b[1;31m[Error] Could not open shell: ${err.message}\x1b[0m\r\n`,
-    });
-  }
-
-  return entry;
-}
-
-function closeTab(id) {
-  const entry = tabRegistry.get(id);
-  if (!entry) return;
-  if (entry.session) {
-    try { entry.session.close(); } catch (_) {}
-    entry.session = null;
-  }
-  tabRegistry.delete(id);
-  broadcast({ type: 'tab:closed', tabId: id, tabs: tabList() });
-}
-
-// ── WebSocket connection handler ──────────────────────────────────────────────
-
-wss.on('connection', (ws, req) => {
+function handleConnection(ws, req) {
   const ip = req.socket.remoteAddress;
   console.log(`[WS] Client connected: ${ip}  (total: ${clients.size + 1})`);
   clients.add(ws);
@@ -290,7 +233,7 @@ wss.on('connection', (ws, req) => {
       entry.subscribers.delete(ws);
     }
   });
-});
+}
 
 // ── VM events ─────────────────────────────────────────────────────────────────
 
@@ -363,9 +306,15 @@ function forwardToTab(entry, data) {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-server.listen(PORT, () => {
-  console.log(`[Server] Democratic Linux running at http://localhost:${PORT}`);
+httpServer.listen(HTTP_PORT, () => {
+  console.log(`[Server] HTTP  → http://localhost:${HTTP_PORT}`);
 });
+
+if (httpsServer) {
+  httpsServer.listen(HTTPS_PORT, () => {
+    console.log(`[Server] HTTPS → https://localhost:${HTTPS_PORT}  (TLS enabled)`);
+  });
+}
 
 vm.start().catch((err) => {
   console.error('[Server] Failed to start VM:', err.message);

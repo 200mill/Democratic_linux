@@ -14,6 +14,7 @@ RUN apt-get update && \
         qemu-utils \
         wget \
         ca-certificates \
+        openssl \
         debootstrap \
         grub-pc \
         grub-pc-bin \
@@ -37,11 +38,26 @@ COPY public/ ./public/
 COPY scripts/ ./scripts/
 RUN chmod +x scripts/create-image.sh
 
-# Expose the web server port
-EXPOSE 3000
+# Expose HTTP and HTTPS ports
+EXPOSE 80
+EXPOSE 443
 
 # vm/ directory must be mounted as a volume so the base image persists.
 VOLUME ["/app/vm"]
 
-# Entrypoint: build the base image if it doesn't exist, then start the server.
-CMD bash -c "[ -f vm/base.img ] || bash scripts/create-image.sh && node src/server.js"
+# Entrypoint: (1) build the base VM image if missing, (2) generate a
+# self-signed TLS cert if GENERATE_SELF_SIGNED_CERT=true and the cert files
+# don't already exist, then (3) start the server.
+CMD bash -c "\
+  [ -f vm/base.img ] || bash scripts/create-image.sh; \
+  if [ \"\${GENERATE_SELF_SIGNED_CERT:-false}\" = 'true' ] \
+     && [ -n \"\${SSL_CERT}\" ] && [ -n \"\${SSL_KEY}\" ] \
+     && [ ! -f \"\${SSL_CERT}\" ]; then \
+    mkdir -p \"\$(dirname \${SSL_CERT})\"; \
+    openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+      -keyout \"\${SSL_KEY}\" -out \"\${SSL_CERT}\" \
+      -subj '/CN=democratic-linux' \
+      -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'; \
+    echo '[SSL] Self-signed certificate generated.'; \
+  fi; \
+  node src/server.js"
