@@ -11,9 +11,10 @@
 
 'use strict';
 
-const http = require('http');
-const path = require('path');
-const fs = require('fs');
+const fs     = require('fs');
+const http   = require('http');
+const https  = require('https');
+const path   = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
 const express = require('express');
 
@@ -22,7 +23,9 @@ const { isBlocked } = require('./filter');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
-const PORT = process.env.PORT || 3000;
+const PORT       = process.env.PORT     || 3000;
+const SSL_CERT   = process.env.SSL_CERT || '';   // path to TLS certificate (PEM)
+const SSL_KEY    = process.env.SSL_KEY  || '';   // path to TLS private key (PEM)
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
 // How many bytes of recent VM output to replay to newly-connected clients
@@ -34,9 +37,20 @@ const OUTPUT_BUFFER_BYTES = 32 * 1024; // 32 KiB
 const app = express();
 app.use(express.static(PUBLIC_DIR));
 
-// ── HTTP server ───────────────────────────────────────────────────────────────
+// ── HTTP / HTTPS server ───────────────────────────────────────────────────────
 
-const server = http.createServer(app);
+let server;
+const useSSL = SSL_CERT && SSL_KEY;
+
+if (useSSL) {
+  const tlsOptions = {
+    cert: fs.readFileSync(SSL_CERT),
+    key:  fs.readFileSync(SSL_KEY),
+  };
+  server = https.createServer(tlsOptions, app);
+} else {
+  server = http.createServer(app);
+}
 
 // ── WebSocket server ──────────────────────────────────────────────────────────
 
@@ -167,7 +181,8 @@ function broadcast(msg) {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, () => {
-  console.log(`[Server] Democratic Linux running at http://localhost:${PORT}`);
+  const proto = useSSL ? 'https' : 'http';
+  console.log(`[Server] Democratic Linux running at ${proto}://localhost:${PORT}${useSSL ? '  (TLS enabled)' : ''}`);
 });
 
 vm.start().catch((err) => {

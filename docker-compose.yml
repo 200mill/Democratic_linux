@@ -5,6 +5,7 @@ services:
       - "${PORT:-3000}:3000"
     volumes:
       - vm-data:/app/vm
+      - ./certs:/app/certs:ro   # mount host cert directory (optional)
     privileged: true
     restart: on-failure:3
     dns:
@@ -13,6 +14,12 @@ services:
       - PORT=3000
       - QEMU_MEM=512M
       - QEMU_CPUS=1
+      # Set SSL_CERT / SSL_KEY to enable HTTPS.
+      # The entrypoint will auto-generate a self-signed cert when both are
+      # left empty and GENERATE_SELF_SIGNED_CERT=true is set.
+      - SSL_CERT=${SSL_CERT:-/app/certs/cert.pem}
+      - SSL_KEY=${SSL_KEY:-/app/certs/key.pem}
+      - GENERATE_SELF_SIGNED_CERT=${GENERATE_SELF_SIGNED_CERT:-true}
 
 volumes:
   vm-data:
