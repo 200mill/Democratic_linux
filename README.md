@@ -1,170 +1,197 @@
 # Democratic Linux
 
-WebSocket + Web terminal emulator backed by a shared QEMU Linux VM.
+Democratic Linux is a shared web terminal backed by a QEMU Linux VM.
 
-접속하는 누구나 `sudo` 명령어를 사용할 수 있으며, 일부 위험한 명령어는 필터링됩니다.
-VM 이미지가 손상되면 자동으로 초기 상태로 재시작됩니다.
+Users open a browser, get an xterm.js terminal, and interact with a Debian VM
+through WebSocket messages handled by a Node.js server. Every browser tab gets
+its own SSH PTY shell, but all shells run inside the same VM and share the same
+filesystem and operating system.
 
----
+The VM is intentionally disposable. Each boot starts from `vm/base.img`, so
+destructive commands are temporary and the VM can be reset back to a clean
+state.
+
+## Features
+
+- Browser terminal UI powered by xterm.js
+- Multiple terminal tabs per browser
+- Shared QEMU VM for all connected users
+- One SSH PTY session per tab
+- Automatic VM reset when QEMU exits or the guest becomes unhealthy
+- Hot-spare VM support for faster failover
+- Optional HTTPS with user-provided or Docker-generated self-signed certs
+- Minimal input filtering for the worst abuse patterns
+
+## Requirements
+
+### Direct host run
+
+Direct image creation is designed for Linux or WSL2 because it uses loop
+devices, mounts, `debootstrap`, and GRUB tooling.
+
+| Tool | Notes |
+| --- | --- |
+| Node.js 18+ | Runs the web server |
+| QEMU | Provides `qemu-system-x86_64` |
+| qemu-utils | Provides QEMU image utilities |
+| debootstrap | Builds the Debian root filesystem |
+| grub-pc-bin, grub-common | Installs the bootloader into the VM image |
+| fdisk, e2fsprogs, mount | Partitioning, ext4, loop mount support |
+| bash | Runs the image creation script |
+
+On Debian or Ubuntu:
+
+```bash
+sudo apt install qemu-system-x86 qemu-utils debootstrap grub-pc-bin grub-common fdisk e2fsprogs util-linux
+```
+
+### Docker run
+
+Docker Compose is the easiest way to run the project on machines where the host
+has Docker and supports privileged containers. The image build happens inside
+the container and `vm/base.img` is kept in a Docker volume.
 
 ## Quickstart
 
-### Prerequisites
-
-| Tool | Version | Notes |
-|---|---|---|
-| Node.js | 18+ | [nodejs.org](https://nodejs.org) |
-| QEMU | any recent | `qemu-system-x86_64` must be in `PATH` |
-| qemu-img | same package as QEMU | used to create the disk image |
-| wget | any | used by the image creation script |
-| mtools | any | `mcopy` used by the image creation script |
-| bash | 4+ | for the setup script |
-
-**Linux (Debian/Ubuntu):**
-```bash
-sudo apt install qemu-system-x86 qemu-utils wget mtools
-```
-
-**macOS (Homebrew):**
-```bash
-brew install qemu wget mtools
-```
-
-**Windows:** Use Docker (see below) or WSL2 with the Linux instructions above.
-
----
-
-### Option A – Run directly (Linux / macOS / WSL2)
+### Option A: Docker Compose
 
 ```bash
-# 1. Clone and enter the project
 git clone <repo-url> democratic-linux
 cd democratic-linux
-
-# 2. Install Node dependencies
-npm install
-
-# 3. Build the base Alpine Linux image  (~2–5 min, one-time)
-bash scripts/create-image.sh
-
-# 4. Start the server
-npm start
-```
-
-Open **http://localhost:3000** in your browser.
-
----
-
-### Option B – Docker Compose (recommended for Windows / servers)
-
-```bash
-# 1. Clone the project
-git clone <repo-url> democratic-linux
-cd democratic-linux
-
-# 2. Build and start
 docker compose up --build
 ```
 
-The first run will download Alpine Linux and build the base image automatically.
-Open **http://localhost:3000** once you see `Democratic Linux running at http://localhost:3000`.
+By default Docker exposes:
 
----
+- HTTP: `http://localhost`
+- HTTPS: `https://localhost` when TLS is configured
 
-### Environment Variables
+The first run creates `vm/base.img` automatically inside the `vm-data` volume.
+That can take several minutes.
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3000` | HTTP / WebSocket listen port |
-| `QEMU_BIN` | `qemu-system-x86_64` | Path to the QEMU binary |
-| `QEMU_MEM` | `256M` | VM memory |
-| `QEMU_CPUS` | `1` | VM virtual CPU count |
+### Option B: Direct run on Linux or WSL2
 
 ```bash
-# Example: more memory, custom port
-PORT=8080 QEMU_MEM=512M npm start
+git clone <repo-url> democratic-linux
+cd democratic-linux
+npm install
+sudo bash scripts/create-image.sh
+npm run build
+HTTP_PORT=3000 npm start
 ```
 
----
+Open `http://localhost:3000`.
+
+For development without compiling first:
+
+```bash
+HTTP_PORT=3000 npm run dev
+```
+
+## Configuration
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `HTTP_PORT` | `80` | HTTP and WebSocket listen port |
+| `PORT` | unset | Legacy alias used when `HTTP_PORT` is not set |
+| `HTTPS_PORT` | `443` | HTTPS and WSS listen port |
+| `SSL_CERT` | unset | Path to TLS certificate PEM |
+| `SSL_KEY` | unset | Path to TLS private key PEM |
+| `GENERATE_SELF_SIGNED_CERT` | `false` | Docker entrypoint can generate a local self-signed cert when cert paths are set |
+| `QEMU_BIN` | `qemu-system-x86_64` | QEMU executable |
+| `QEMU_MEM` | `512M` | VM memory |
+| `QEMU_CPUS` | `1` | VM virtual CPU count |
+| `SSH_PORT` | `2222` | Host port forwarded to the active VM's SSH port 22 |
+| `SSH_SPARE_PORT` | `2223` | Host port forwarded to the spare VM's SSH port 22 |
+
+Example:
+
+```bash
+HTTP_PORT=8080 QEMU_MEM=1G QEMU_CPUS=2 npm start
+```
 
 ## Architecture
 
-```
-Browser (xterm.js)
-      │  WebSocket /ws
-      ▼
- server.js  (Express + ws)
-      │  TCP 127.0.0.1:4444
-      ▼
-  QEMU VM  (Alpine Linux, serial console)
+```text
+Browser terminal (xterm.js)
+  |
+  | WebSocket /ws
+  v
+Node server (Express + ws)
+  |
+  | SSH PTY per browser tab
+  v
+QEMU VM (Debian bookworm, OpenSSH)
 ```
 
-- All connected browsers **share one terminal session** (broadcast model).
-- Input from any browser is forwarded to the VM; VM output is broadcast to every browser.
-- On every boot, `vm/base.qcow2` is copied to `vm/work.qcow2` so the VM always starts clean.
-- If QEMU exits unexpectedly, the VM manager automatically resets and relaunches after 3 s.
+The "democratic" part is that users share one VM. Each tab has independent shell
+state, history, working directory, and processes, but every tab sees the same
+guest OS and disk contents.
 
----
+## VM Lifecycle
+
+`scripts/create-image.sh` creates a 2 GiB raw disk image at `vm/base.img`.
+The image contains Debian bookworm, OpenSSH, sudo, a blank root password, and
+passwordless sudo.
+
+At runtime:
+
+1. The active VM starts from a fresh copy of `vm/base.img` as `vm/work.img`.
+2. The server waits until SSH accepts connections.
+3. Browser tabs open SSH PTY sessions into the active VM.
+4. A spare VM is warmed in the background as `vm/spare.img`.
+5. If the active VM exits, panics, or fails repeated SSH health checks, the
+   manager resets it.
+6. If the spare VM is ready, it is promoted immediately. Otherwise a cold boot
+   starts from a fresh copy of `vm/base.img`.
+
+To rebuild the base image:
+
+```bash
+rm -f vm/base.img vm/work.img vm/spare.img
+sudo bash scripts/create-image.sh
+```
 
 ## Command Filtering
 
-Dangerous inputs are dropped before reaching the VM:
+Input is intentionally permissive because the VM is disposable. Users can run
+destructive guest commands such as `rm -rf /`, `mkfs`, or `dd`; the damage is
+confined to the temporary VM copy.
 
-| What is blocked | Why |
-|---|---|
-| `Ctrl-A` byte (0x01) | Prevents QEMU monitor escape sequence takeover |
-| Fork bomb pattern `:(){:|:&};:` | Prevents DoS |
+The server currently blocks:
 
-Everything else — including `rm -rf /`, `mkfs`, `dd` — is **intentionally allowed**.
-The VM resets to a clean state on every restart, so destruction is temporary.
+| Blocked input | Reason |
+| --- | --- |
+| Ctrl-A byte (`0x01`) | Prevents QEMU control escape abuse |
+| Fork bomb pattern `:(){:|:&};:` | Prevents obvious CPU/process exhaustion |
 
-To add more blocked patterns, edit `src/filter.js`:
-
-```js
-const BLOCKED_PATTERNS = [
-  /:\(\)\s*\{\s*:|&\s*\}/,   // fork bomb
-  // add your own RegExp here
-];
-
-const BLOCKED_SUBSTRINGS = [
-  // 'shutdown', 'reboot',   // uncomment to block these
-];
-```
-
----
-
-## VM Reset
-
-The VM resets automatically whenever:
-- QEMU process exits (crash, `poweroff`, `reboot` from inside the VM, etc.)
-
-On reset:
-1. `vm/base.qcow2` is copied fresh to `vm/work.qcow2`.
-2. QEMU is relaunched.
-3. All connected browsers receive a yellow banner: *VM is resetting, please wait…*
-
-To **rebuild the base image** from scratch:
-```bash
-rm vm/base.qcow2
-bash scripts/create-image.sh
-```
-
----
+To change filtering rules, edit `src/filter.ts` and rebuild, or edit
+`src/filter.js` if you are running the JavaScript source directly.
 
 ## Project Structure
 
-```
+```text
 democratic-linux/
-├── src/
-│   ├── server.js       # HTTP + WebSocket server (entry point)
-│   ├── vm.js           # QEMU process manager (start / auto-reset)
-│   └── filter.js       # Input filter (fork bombs, Ctrl-A, etc.)
-├── public/
-│   └── index.html      # xterm.js web terminal frontend
-├── scripts/
-│   └── create-image.sh # One-time Alpine Linux image builder
-├── vm/                 # base.qcow2 lives here (git-ignored)
-├── package.json
-├── Dockerfile
-└── docker-compose.yml
+|-- src/
+|   |-- server.ts       # HTTP, HTTPS, WebSocket, tab registry
+|   |-- vm.ts           # QEMU lifecycle, SSH PTY sessions, hot spare
+|   `-- filter.ts       # Input filter
+|-- public/
+|   `-- index.html      # xterm.js browser UI
+|-- scripts/
+|   `-- create-image.sh # Debian VM image builder
+|-- vm/                 # Runtime VM images: base.img, work.img, spare.img
+|-- package.json
+|-- Dockerfile
+`-- docker-compose.yml
 ```
+
+## Notes
+
+- `npm start` runs `dist/server.js`, so run `npm run build` first.
+- Docker starts `node src/server.js` directly and does not require a TypeScript
+  build step.
+- The repository currently contains both TypeScript and JavaScript sources.
+  Keep them in sync if you change runtime behavior.
+- The `vm/` directory is for VM image state. Large runtime images should not be
+  committed.
