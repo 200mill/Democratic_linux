@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 VM_DIR="$PROJECT_DIR/vm"
 BASE_IMAGE="$VM_DIR/base.img"
-RAW_IMAGE="$VM_DIR/base.img"   # We write directly to base.img (raw format)
+RAW_IMAGE="$VM_DIR/base.img.tmp"   # build into a temp file; rename to base.img on success
 DISK_SIZE_BYTES=$((2 * 1024 * 1024 * 1024))   # 2 GiB (kernel+sshd+grub ~900 MiB)
 # Using raw format directly avoids the qemu-img conversion step that would
 # require ~3 GiB of temporary disk space (raw + qcow2 simultaneously).
@@ -42,19 +42,11 @@ P2_OFFSET=$(( P2_START_SECTOR * SECTOR_SIZE ))
 
 mkdir -p "$VM_DIR"
 
-# Remove any leftover raw image from a previous failed run
+# Remove any leftover temp image from a previous failed run
 rm -f "$RAW_IMAGE"
 
-# ── 1. Create blank raw disk image ───────────────────────────────────────────
-echo "[create-image] Creating blank 2G raw disk image…"
-truncate -s "$DISK_SIZE_BYTES" "$RAW_IMAGE"
-
-# ── 2. Attach whole disk to loop device ──────────────────────────────────────
-echo "[create-image] Attaching whole disk to loop device…"
-LOOP_WHOLE="$(losetup --find --show "$RAW_IMAGE")"
-echo "[create-image] Whole-disk loop: $LOOP_WHOLE"
-
-LOOP_ROOT=""   # will be set after partitioning
+LOOP_WHOLE=""  # set once the whole-disk loop is attached
+LOOP_ROOT=""   # set after partitioning
 
 cleanup() {
   echo "[create-image] Cleaning up…"
@@ -63,13 +55,29 @@ cleanup() {
   umount /mnt/dev/pts 2>/dev/null || true
   umount /mnt/dev     2>/dev/null || true
   umount /mnt         2>/dev/null || true
-  [[ -n "${LOOP_ROOT:-}" ]] && losetup -d "$LOOP_ROOT" 2>/dev/null || true
-  losetup -d "$LOOP_WHOLE" 2>/dev/null || true
-  # Remove the partially-written image only if it exists and is incomplete
-  # (i.e. we didn't reach the trap-disable line at the end of the script).
-  rm -f "$BASE_IMAGE"
+  [[ -n "${LOOP_ROOT:-}"  ]] && losetup -d "$LOOP_ROOT"  2>/dev/null || true
+  [[ -n "${LOOP_WHOLE:-}" ]] && losetup -d "$LOOP_WHOLE" 2>/dev/null || true
+  # Only ever remove the in-progress temp image. A previously-published
+  # base.img is never touched, and a complete build renames the temp away
+  # before disabling this trap — so reaching here always means failure.
+  rm -f "$RAW_IMAGE"
 }
+# Arm cleanup BEFORE the first write, so a failure at any step (including the
+# losetup call below) removes the half-built temp image instead of leaving a
+# usable-looking husk that the startup check would mistake for a finished build.
 trap cleanup EXIT
+
+# ── 1. Create blank raw disk image ───────────────────────────────────────────
+echo "[create-image] Creating blank 2G raw disk image…"
+truncate -s "$DISK_SIZE_BYTES" "$RAW_IMAGE"
+
+# ── 2. Attach whole disk to loop device ──────────────────────────────────────
+echo "[create-image] Attaching whole disk to loop device…"
+# Load the loop kernel module; create /dev/loop-control if absent (privileged container).
+modprobe loop 2>/dev/null || true
+[[ -c /dev/loop-control ]] || mknod /dev/loop-control c 10 237
+LOOP_WHOLE="$(losetup --find --show "$RAW_IMAGE")"
+echo "[create-image] Whole-disk loop: $LOOP_WHOLE"
 
 # ── 3. Partition the disk ─────────────────────────────────────────────────────
 # MBR layout:
@@ -233,9 +241,17 @@ GRUB_BIOS_SETUP="$(command -v grub-bios-setup 2>/dev/null \
 "$GRUB_BIOS_SETUP" \
   --directory /mnt/boot/grub/i386-pc \
   --skip-fs-probe \
+  --force \
   "$LOOP_WHOLE"
 
-echo "[create-image] grub-bios-setup completed."
+# Verify the boot signature was written; exit loudly if not.
+BOOT_SIG="$(dd if="$LOOP_WHOLE" bs=1 skip=510 count=2 2>/dev/null | od -A n -t x1 | tr -d ' \n')"
+if [[ "$BOOT_SIG" != "55aa" ]]; then
+  echo "[create-image] ERROR: MBR boot signature is missing (got: ${BOOT_SIG:-empty})" >&2
+  echo "[create-image] grub-bios-setup did not write boot.img to the MBR." >&2
+  exit 1
+fi
+echo "[create-image] grub-bios-setup completed (MBR boot signature verified: 0x55AA)."
 
 # ── Generate grub.cfg manually (bypass update-grub) ────────────────────────
 # update-grub emits "search --fs-uuid <loop-uuid>" which causes GRUB rescue at
@@ -279,7 +295,11 @@ umount /mnt/dev
 umount /mnt
 
 losetup -d "$LOOP_ROOT"; LOOP_ROOT=""
-losetup -d "$LOOP_WHOLE"
+losetup -d "$LOOP_WHOLE"; LOOP_WHOLE=""
+
+# Publish atomically: base.img now exists ONLY because the build fully
+# completed (partitioned, debootstrapped, GRUB installed + signature verified).
+mv "$RAW_IMAGE" "$BASE_IMAGE"
 trap - EXIT   # disable cleanup trap – done
 
 echo ""

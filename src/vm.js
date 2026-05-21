@@ -344,9 +344,12 @@ class VMManager extends EventEmitter {
     if (this._running) return;
     this._running = true;
 
-    if (!fs.existsSync(config.baseImage)) {
+    const baseSize = fs.existsSync(config.baseImage)
+      ? fs.statSync(config.baseImage).size
+      : 0;
+    if (baseSize === 0) {
       this.emit('error', new Error(
-        `Base image not found: ${config.baseImage}\n` +
+        `Base image not found or empty: ${config.baseImage}\n` +
         `Run  scripts/create-image.sh  to create it first.`
       ));
       this._running = false;

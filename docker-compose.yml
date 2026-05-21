@@ -7,6 +7,9 @@ services:
     volumes:
       - vm-data:/app/vm
       - ./certs:/app/certs    # writable — needed for auto-generated self-signed cert
+    security_opt:
+      - label:disable
+    init: true
     privileged: true
     restart: on-failure:3
     environment:

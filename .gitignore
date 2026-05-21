@@ -1,4 +1,7 @@
-vm/work.qcow2
+vm/*.img
+vm/*.img.tmp
+vm/*.qcow2
+*.iso
 node_modules/
 npm-debug.log*
 .env
