@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Democratic Linux</title>
+  <link rel="stylesheet" href="https://unpkg.com/@xterm/xterm@5.3.0/css/xterm.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #1a1a1a; color: #e0e0e0; font-family: monospace; }
+
+    #top-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: #111;
+      border-bottom: 1px solid #333;
+      height: 38px;
+    }
+
+    #status-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #888;
+      flex-shrink: 0;
+    }
+    #status-dot.ready    { background: #4caf50; }
+    #status-dot.booting  { background: #ff9800; }
+    #status-dot.resetting { background: #f44336; }
+
+    #status-text { font-size: 12px; color: #aaa; flex-shrink: 0; }
+
+    #tab-bar {
+      display: flex;
+      flex: 1;
+      gap: 4px;
+      overflow-x: auto;
+      align-items: center;
+    }
+
+    .tab-btn {
+      padding: 3px 10px;
+      background: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 3px;
+      color: #ccc;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: monospace;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .tab-btn:hover  { background: #333; }
+    .tab-btn.active { background: #1e3a5f; border-color: #4a90d9; color: #fff; }
+
+    #new-tab-btn {
+      padding: 3px 8px;
+      background: transparent;
+      border: 1px solid #555;
+      border-radius: 3px;
+      color: #aaa;
+      cursor: pointer;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    #new-tab-btn:hover { background: #2a2a2a; color: #fff; }
+
+    #spare-btn {
+      display: none;
+      padding: 3px 10px;
+      background: #2a1a00;
+      border: 1px solid #664400;
+      border-radius: 3px;
+      color: #ffaa44;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: monospace;
+      flex-shrink: 0;
+    }
+    #spare-btn:hover { background: #3a2a00; }
+    #spare-btn.ready { border-color: #228822; color: #66ff66; background: #0a1a0a; }
+
+    #terminal-container { position: relative; flex: 1; overflow: hidden; }
+    #overlay {
+      display: none;
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 10;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      color: #aaa;
+    }
+    #overlay.visible { display: flex; }
+
+    .term-pane {
+      display: none;
+      position: absolute;
+      inset: 0;
+      padding: 4px;
+    }
+    .term-pane.active { display: block; }
+
+    body { display: flex; flex-direction: column; }
+  </style>
+</head>
+<body>
+  <div id="top-bar">
+    <div id="status-dot"></div>
+    <span id="status-text">connecting…</span>
+    <div id="tab-bar">
+      <button id="new-tab-btn" title="New tab (Ctrl+T)">+</button>
+    </div>
+    <button id="spare-btn">spare: none</button>
+  </div>
+  <div id="terminal-container">
+    <div id="overlay" class="visible">Connecting to server…</div>
+  </div>
+
+  <script src="https://unpkg.com/@xterm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://unpkg.com/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    // ── StatusUI ────────────────────────────────────────────────────────────
+    function StatusUI() {
+      const dot  = document.getElementById('status-dot');
+      const text = document.getElementById('status-text');
+      const overlay = document.getElementById('overlay');
+
+      function set(status) {
+        dot.className = status;
+        text.textContent = status;
+      }
+      function showOverlay(msg) {
+        overlay.textContent = msg;
+        overlay.classList.add('visible');
+      }
+      function hideOverlay() {
+        overlay.classList.remove('visible');
+      }
+
+      return { set, showOverlay, hideOverlay };
+    }
+
+    // ── SpareUI ─────────────────────────────────────────────────────────────
+    function SpareUI(sendFn) {
+      const btn = document.getElementById('spare-btn');
+      let _status = 'none';
+      let _clickMode = 'request'; // 'request' | 'load'
+
+      btn.addEventListener('click', () => {
+        if (_clickMode === 'request') {
+          sendFn({ type: 'spare:request' });
+        } else {
+          sendFn({ type: 'spare:load' });
+        }
+      });
+
+      function update(status) {
+        _status = status;
+        if (status === 'none') {
+          btn.style.display = 'none';
+          _clickMode = 'request';
+        } else if (status === 'booting') {
+          btn.style.display = '';
+          btn.className = '';
+          btn.textContent = 'spare: booting…';
+          _clickMode = 'request';
+        } else if (status === 'ready') {
+          btn.style.display = '';
+          btn.className = 'ready';
+          btn.textContent = 'spare: ready (click to load)';
+          _clickMode = 'load';
+        }
+      }
+
+      return { update, status: () => _status };
+    }
+
+    // ── TabManager ──────────────────────────────────────────────────────────
+    function TabManager(sendFn) {
+      const tabBar   = document.getElementById('tab-bar');
+      const newBtn   = document.getElementById('new-tab-btn');
+      const container = document.getElementById('terminal-container');
+
+      const _tabs    = new Map(); // tabId → { btn, pane }
+      let   _active  = null;
+
+      newBtn.addEventListener('click', () => openNew());
+
+      document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 't') { e.preventDefault(); openNew(); }
+        if (e.ctrlKey && e.key === 'w') { e.preventDefault(); if (_active) close(_active); }
+        if (e.ctrlKey && e.key === 'Tab') { e.preventDefault(); cycleNext(); }
+      });
+
+      function openNew(tabId, title) {
+        sendFn({ type: 'tab:open', tabId, title });
+      }
+
+      function close(tabId) {
+        sendFn({ type: 'tab:close', tabId });
+      }
+
+      function select(tabId) {
+        if (_active === tabId) return;
+        // Deactivate current
+        if (_active && _tabs.has(_active)) {
+          _tabs.get(_active).btn.classList.remove('active');
+          _tabs.get(_active).pane.classList.remove('active');
+        }
+        _active = tabId;
+        if (_tabs.has(tabId)) {
+          _tabs.get(tabId).btn.classList.add('active');
+          _tabs.get(tabId).pane.classList.add('active');
+        }
+        sendFn({ type: 'tab:select', tabId });
+      }
+
+      function cycleNext() {
+        const ids = Array.from(_tabs.keys());
+        if (ids.length < 2) return;
+        const idx = ids.indexOf(_active);
+        select(ids[(idx + 1) % ids.length]);
+      }
+
+      function addTab(tabId, title) {
+        if (_tabs.has(tabId)) return;
+
+        const btn = document.createElement('button');
+        btn.className = 'tab-btn';
+        btn.textContent = title || tabId;
+        btn.title = tabId;
+        btn.addEventListener('click', () => select(tabId));
+        btn.addEventListener('dblclick', () => close(tabId));
+        tabBar.insertBefore(btn, newBtn);
+
+        const pane = document.createElement('div');
+        pane.className = 'term-pane';
+        container.appendChild(pane);
+
+        _tabs.set(tabId, { btn, pane });
+      }
+
+      function removeTab(tabId) {
+        const t = _tabs.get(tabId);
+        if (!t) return;
+        t.btn.remove();
+        t.pane.remove();
+        _tabs.delete(tabId);
+        if (_active === tabId) {
+          _active = null;
+          const ids = Array.from(_tabs.keys());
+          if (ids.length > 0) select(ids[0]);
+        }
+      }
+
+      function syncList(serverTabs) {
+        const serverIds = new Set(serverTabs.map(t => t.id));
+        for (const id of _tabs.keys()) {
+          if (!serverIds.has(id)) removeTab(id);
+        }
+        for (const t of serverTabs) {
+          if (!_tabs.has(t.id)) addTab(t.id, t.title);
+        }
+      }
+
+      function getPaneFor(tabId) {
+        return _tabs.get(tabId)?.pane ?? null;
+      }
+
+      function getActiveId() { return _active; }
+      function hasTab(tabId) { return _tabs.has(tabId); }
+
+      return { addTab, removeTab, syncList, select, getPaneFor, getActiveId, hasTab, openNew };
+    }
+
+    // ── TerminalManager ─────────────────────────────────────────────────────
+    function TerminalManager(sendFn) {
+      const _terms = new Map(); // tabId → { term, fitAddon }
+
+      function create(tabId, pane) {
+        if (_terms.has(tabId)) return;
+
+        const term = new Terminal({
+          cursorBlink: true,
+          fontFamily: 'monospace',
+          fontSize: 14,
+          theme: { background: '#1a1a1a', foreground: '#e0e0e0' },
+        });
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(pane);
+        fitAddon.fit();
+
+        term.onData(data => {
+          sendFn({ type: 'input', tabId, data: btoa(data) });
+        });
+
+        _terms.set(tabId, { term, fitAddon });
+
+        window.addEventListener('resize', () => {
+          if (_terms.has(tabId)) {
+            _terms.get(tabId).fitAddon.fit();
+            const { cols, rows } = _terms.get(tabId).term;
+            sendFn({ type: 'resize', tabId, cols, rows });
+          }
+        });
+      }
+
+      function write(tabId, data) {
+        _terms.get(tabId)?.term.write(data);
+      }
+
+      function destroy(tabId) {
+        const t = _terms.get(tabId);
+        if (t) { t.term.dispose(); _terms.delete(tabId); }
+      }
+
+      function fit(tabId) {
+        const t = _terms.get(tabId);
+        if (!t) return;
+        t.fitAddon.fit();
+        sendFn({ type: 'resize', tabId, cols: t.term.cols, rows: t.term.rows });
+      }
+
+      return { create, write, destroy, fit };
+    }
+
+    // ── MessageRouter ───────────────────────────────────────────────────────
+    function MessageRouter(ui, spare, tabs, terms, sendFn) {
+
+      function route(msg) {
+        switch (msg.type) {
+          case 'vm:status':
+            ui.set(msg.status);
+            if (msg.status === 'ready') ui.hideOverlay();
+            else ui.showOverlay(msg.status === 'resetting' ? 'VM resetting…' : 'VM booting…');
+            break;
+
+          case 'vm:spare':
+            spare.update(msg.status);
+            break;
+
+          case 'tab:list':
+            tabs.syncList(msg.tabs);
+            // Auto-select first tab if none active
+            if (!tabs.getActiveId() && msg.tabs.length > 0) {
+              _ensureTermAndSelect(msg.tabs[0].id);
+            }
+            break;
+
+          case 'tab:opened': {
+            tabs.addTab(msg.tabId, msg.title);
+            _ensureTermAndSelect(msg.tabId);
+            break;
+          }
+
+          case 'tab:closed':
+            terms.destroy(msg.tabId);
+            tabs.removeTab(msg.tabId);
+            break;
+
+          case 'output': {
+            if (!tabs.hasTab(msg.tabId)) break;
+            const data = atob(msg.data);
+            terms.write(msg.tabId, data);
+            break;
+          }
+
+          case 'info':
+            // Write info text to active tab or console
+            if (msg.tabId) {
+              terms.write(msg.tabId, '\r\n\x1b[33m' + msg.text + '\x1b[0m\r\n');
+            } else {
+              console.info('[server]', msg.text);
+            }
+            break;
+        }
+      }
+
+      function _ensureTermAndSelect(tabId) {
+        const pane = tabs.getPaneFor(tabId);
+        if (pane) {
+          terms.create(tabId, pane);
+          tabs.select(tabId);
+          terms.fit(tabId);
+        }
+      }
+
+      return { route };
+    }
+
+    // ── WSClient ────────────────────────────────────────────────────────────
+    function WSClient(router) {
+      let _ws = null;
+      let _delay = 1000;
+      const MAX_DELAY = 10000;
+
+      function send(msg) {
+        if (_ws && _ws.readyState === WebSocket.OPEN) {
+          _ws.send(JSON.stringify(msg));
+        }
+      }
+
+      function connect() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        _ws = new WebSocket(proto + '//' + location.host + '/ws');
+
+        _ws.addEventListener('open', () => {
+          _delay = 1000;
+          console.log('WebSocket connected');
+        });
+
+        _ws.addEventListener('message', (ev) => {
+          let msg;
+          try { msg = JSON.parse(ev.data); } catch { return; }
+          router.route(msg);
+        });
+
+        _ws.addEventListener('close', () => {
+          _ws = null;
+          setTimeout(connect, _delay);
+          _delay = Math.min(_delay * 2, MAX_DELAY);
+        });
+
+        _ws.addEventListener('error', () => {
+          // close event will fire and handle reconnect
+        });
+      }
+
+      connect();
+      return { send };
+    }
+
+    // ── Bootstrap ───────────────────────────────────────────────────────────
+    const ui     = StatusUI();
+    // sendFn is defined after WSClient, create a late-binding proxy
+    let _wsSend = (_msg) => {};
+    const sendFn = (msg) => _wsSend(msg);
+
+    const spare  = SpareUI(sendFn);
+    const tabs   = TabManager(sendFn);
+    const terms  = TerminalManager(sendFn);
+    const router = MessageRouter(ui, spare, tabs, terms, sendFn);
+    const ws     = WSClient(router);
+
+    _wsSend = ws.send;
+
+  })();
+  </script>
+</body>
+</html>
