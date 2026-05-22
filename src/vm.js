@@ -232,8 +232,26 @@ class VMInstance {
     console.log(`[VM:${this.label}] Launching QEMU on port ${this.port}`);
     this.proc = spawn(this.qemuBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    this.proc.stdout.on('data', (d) => onOutput(this, d));
-    this.proc.stderr.on('data', (d) => process.stderr.write(`[QEMU:${this.label}] ${d}`));
+    // Buffer output to avoid fragmented logs where prefixes appear mid-line
+    const setupLineBuffer = (stream, isError) => {
+      let buffer = '';
+      stream.on('data', (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Keep the last incomplete line in buffer
+        for (const line of lines) {
+          if (isError) {
+            process.stderr.write(`[QEMU:${this.label}] ${line}\n`);
+          } else {
+            onOutput(this, line + '\n');
+          }
+        }
+      });
+    };
+
+    setupLineBuffer(this.proc.stdout, false);
+    setupLineBuffer(this.proc.stderr, true);
+
     this.proc.on('exit',  (code, signal) => { this.proc = null; this.ready = false; onExit(this, code, signal); });
     this.proc.on('error', (err) => console.error(`[VM:${this.label}] spawn error:`, err.message));
   }
