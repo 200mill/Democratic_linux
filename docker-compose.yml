@@ -16,6 +16,9 @@ services:
       - HTTPS_PORT=443
       - QEMU_MEM=512M
       - QEMU_CPUS=1
+      # Set to 1 to block external network access inside the VM (recommended for public deployments).
+      # SSH forwarding still works so browser tabs are unaffected.
+      - BLOCK_NETWORK=1
       # SSL is opt-in. To enable HTTPS set SSL_CERT and SSL_KEY to PEM file paths
       # and optionally set GENERATE_SELF_SIGNED_CERT=true to auto-generate a cert.
       # Example:

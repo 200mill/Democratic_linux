@@ -98,6 +98,18 @@
       border-color: #4caf5066;
     }
 
+    #network-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid #f4433666;
+      color: #f44336;
+      background: #2a1a1a;
+      flex-shrink: 0;
+      display: none;
+    }
+    #network-badge.visible { display: inline-block; }
+
     /* ── Tab bar ── */
     #tabbar {
       display: flex;
@@ -256,6 +268,7 @@
     <h1>Democratic Linux</h1>
     <span id="status-text">Connecting…</span>
     <span class="badge" id="badge"></span>
+    <span id="network-badge" title="External network access is disabled in this VM">Network Blocked</span>
     <button id="spare-btn" title="Warm up a spare VM in the background">Request Spare</button>
   </div>
 
@@ -312,15 +325,16 @@
 
   // ── UI helpers ─────────────────────────────────────────────────────────────
 
-  const dot        = document.getElementById('status-dot');
-  const statusText = document.getElementById('status-text');
-  const overlay    = document.getElementById('overlay');
-  const overlayTxt = document.getElementById('overlay-text');
-  const tabbar     = document.getElementById('tabbar');
-  const tabNew     = document.getElementById('tab-new');
+  const dot          = document.getElementById('status-dot');
+  const statusText   = document.getElementById('status-text');
+  const overlay      = document.getElementById('overlay');
+  const overlayTxt   = document.getElementById('overlay-text');
+  const tabbar       = document.getElementById('tabbar');
+  const tabNew       = document.getElementById('tab-new');
   const tabbarNotice = document.getElementById('tabbar-notice');
-  const stack      = document.getElementById('terminal-stack');
-  const spareBtn   = document.getElementById('spare-btn');
+  const stack        = document.getElementById('terminal-stack');
+  const spareBtn     = document.getElementById('spare-btn');
+  const networkBadge = document.getElementById('network-badge');
 
   function setStatus(state, text) {
     dot.className    = 'dot ' + state;
@@ -524,6 +538,11 @@
 
       case 'vm:status': {
         vmReady = (msg.status === 'ready');
+        if (msg.networkBlocked) {
+          networkBadge.classList.add('visible');
+        } else {
+          networkBadge.classList.remove('visible');
+        }
         if (msg.status === 'ready') {
           setStatus('online', 'Connected');
           tabbarNotice.style.display = 'none';

@@ -53,6 +53,12 @@ const { Client }    = require('ssh2');
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
+// When true, QEMU's user-mode networking is started with restrict=on, which
+// blocks the guest from reaching any external host.  SSH forwarding still
+// works because hostfwd ports bypass the restriction.
+const BLOCK_NETWORK = process.env.BLOCK_NETWORK === '1' ||
+                      process.env.BLOCK_NETWORK === 'true';
+
 const config = {
   baseImage:        path.resolve(__dirname, '..', 'vm', 'base.img'),
   // Active VM
@@ -218,11 +224,13 @@ class VMInstance {
     }
     console.log(`[VM:${this.label}] Prepared fresh image → ${path.basename(this.image)}`);
 
+    const netdev = `user,id=net0,hostfwd=tcp:127.0.0.1:${this.port}-:22` +
+                   (BLOCK_NETWORK ? ',restrict=on' : '');
     const args = [
       '-m',     this.memory,
       '-smp',   this.cpus,
       '-drive', `file=${this.image},format=raw,if=virtio`,
-      '-netdev', `user,id=net0,hostfwd=tcp:127.0.0.1:${this.port}-:22`,
+      '-netdev', netdev,
       '-device', 'virtio-net-pci,netdev=net0',
       '-nographic',
       '-monitor', 'none',
@@ -348,6 +356,10 @@ class VMManager extends EventEmitter {
 
   get isReady() {
     return !!(this._active && this._active.ready);
+  }
+
+  get networkBlocked() {
+    return BLOCK_NETWORK;
   }
 
   /** 'none' | 'booting' | 'ready' */

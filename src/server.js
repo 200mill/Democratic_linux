@@ -187,6 +187,7 @@ function handleConnection(ws, req) {
   sendTo(ws, {
     type: 'vm:status',
     status: vm.isReady ? 'ready' : 'booting',
+    networkBlocked: vm.networkBlocked,
   });
   sendTo(ws, { type: 'tab:list', tabs: tabList() });
   sendTo(ws, { type: 'vm:spare', status: vm.spareStatus });
@@ -312,7 +313,7 @@ if (wssHttps) attachWss(wssHttps);
 // ── VM events ─────────────────────────────────────────────────────────────────
 
 vm.on('ready', () => {
-  broadcast({ type: 'vm:status', status: 'ready' });
+  broadcast({ type: 'vm:status', status: 'ready', networkBlocked: vm.networkBlocked });
 
   // Open SSH sessions for any tabs that were created while the VM was booting.
   for (const [id, entry] of tabRegistry.entries()) {
@@ -336,7 +337,7 @@ vm.on('ready', () => {
 });
 
 vm.on('reset', () => {
-  broadcast({ type: 'vm:status', status: 'resetting' });
+  broadcast({ type: 'vm:status', status: 'resetting', networkBlocked: vm.networkBlocked });
   // Close all tab sessions (the VM is gone); clear their output buffers.
   for (const [id, entry] of tabRegistry.entries()) {
     if (entry.session) {
