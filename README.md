@@ -75,7 +75,7 @@ Open **http://localhost:3000** once you see `Democratic Linux running at http://
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORT` | `3000` | HTTP / WebSocket listen port |
+| `HTTP_PORT` (or `PORT`) | `3000` | HTTP / WebSocket listen port. `HTTP_PORT` wins if both are set. |
 | `QEMU_BIN` | `qemu-system-x86_64` | Path to the QEMU binary |
 | `QEMU_MEM` | `256M` | VM memory |
 | `QEMU_CPUS` | `1` | VM virtual CPU count |

@@ -105,28 +105,36 @@ class TabSession extends EventEmitter {
   async open() {
     return new Promise((resolve, reject) => {
       const client = new Client();
+      let settled  = false;
+      let stream   = null;
+
+      const settleResolve = () => { if (!settled) { settled = true; resolve(); } };
+      const settleReject  = (err) => {
+        if (settled) return;
+        settled = true;
+        try { client.end(); } catch (_) {}
+        reject(err);
+      };
 
       client.on('ready', () => {
         client.shell(
           { term: 'xterm-256color', cols: this._cols, rows: this._rows },
-          (err, stream) => {
-            if (err) {
-              client.end();
-              return reject(err);
-            }
+          (err, s) => {
+            if (err) return settleReject(err);
 
             this._client = client;
-            this._stream = stream;
+            this._stream = s;
+            stream       = s;
 
-            stream.on('data', (data) => {
+            s.on('data', (data) => {
               if (!this._closed) this.emit('data', data);
             });
 
-            stream.stderr.on('data', (data) => {
+            s.stderr.on('data', (data) => {
               if (!this._closed) this.emit('data', data);
             });
 
-            stream.on('close', () => {
+            s.on('close', () => {
               this._stream = null;
               if (!this._closed) {
                 this._closed = true;
@@ -135,27 +143,35 @@ class TabSession extends EventEmitter {
               try { client.end(); } catch (_) {}
             });
 
-            stream.on('error', (err) => {
+            s.on('error', (err) => {
               console.error(`[Tab ${this.id}] SSH stream error:`, err.message);
+              // If the stream errors before we resolved (rare race), reject.
+              if (!settled) settleReject(err);
             });
 
-            resolve();
+            settleResolve();
           }
         );
       });
 
-      client.on('error', (err) => {
-        reject(err);
+      client.on('error', (err) => settleReject(err));
+      client.on('close', () => {
+        // Underlying SSH connection dropped before shell() callback fired.
+        if (!settled) settleReject(new Error('SSH connection closed before shell opened'));
       });
 
-      client.connect({
-        host:         '127.0.0.1',
-        port:         this._vm.activePort,   // always use the current active port
-        username:     config.sshUser,
-        password:     config.sshPassword,
-        hostVerifier: () => true,
-        readyTimeout: 8000,
-      });
+      try {
+        client.connect({
+          host:         '127.0.0.1',
+          port:         this._vm.activePort,   // always use the current active port
+          username:     config.sshUser,
+          password:     config.sshPassword,
+          hostVerifier: () => true,
+          readyTimeout: 8000,
+        });
+      } catch (err) {
+        settleReject(err);
+      }
     });
   }
 
@@ -544,6 +560,31 @@ class VMManager extends EventEmitter {
   closeTab(id) {
     const tab = this._tabs.get(id);
     if (tab) tab.close();
+  }
+
+  /**
+   * Wait for the active VM to become SSH-ready. Resolves true on success,
+   * false on timeout. Safe to call concurrently — multiple callers share the
+   * same wait. Rejects nothing; callers must check the boolean return value.
+   */
+  waitForReady(timeoutMs) {
+    return new Promise((resolve) => {
+      if (this.isReady) return resolve(true);
+      if (!this._running) return resolve(false);
+
+      const timer = setTimeout(() => {
+        this.removeListener('ready', onReady);
+        resolve(false);
+      }, timeoutMs);
+
+      const onReady = () => {
+        clearTimeout(timer);
+        this.removeListener('ready', onReady);
+        resolve(true);
+      };
+
+      this.once('ready', onReady);
+    });
   }
 
   // ── Internal helpers ─────────────────────────────────────────────────────

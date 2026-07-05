@@ -124,15 +124,40 @@ function sendTo(ws, msg) {
 
 // ── Open / close tab ──────────────────────────────────────────────────────────
 
-async function openTab(id, title) {
+/**
+ * Open a new tab.  The `requesterWs` (if provided) is subscribed to the new
+ * tab immediately and is also the target for error messages during the wait.
+ */
+async function openTab(id, title, requesterWs) {
   if (tabRegistry.has(id)) return tabRegistry.get(id);
 
   const entry = makeTabEntry(id, title || `Tab ${tabRegistry.size + 1}`);
   tabRegistry.set(id, entry);
 
+  if (requesterWs) entry.subscribers.add(requesterWs);
   broadcast({ type: 'tab:list', tabs: tabList() });
 
-  if (!vm.isReady) return entry;
+  // If the requester is online, confirm the open immediately so the UI can
+  // finish wiring up.
+  if (requesterWs) {
+    sendTo(requesterWs, { type: 'tab:opened', tabId: id, title: entry.title, tabs: tabList() });
+  }
+
+  // Wait for the VM to be ready (up to 10 s) before trying to spawn an SSH
+  // session.  This avoids the race where tab:open arrives during boot or
+  // during a reset.
+  if (!vm.isReady) {
+    const ready = await vm.waitForReady(10_000);
+    if (!ready) {
+      const msg = '\r\n\x1b[1;31m[Error] VM did not become ready in time — tab not opened.\x1b[0m\r\n';
+      if (requesterWs) sendTo(requesterWs, { type: 'info', tabId: id, text: msg });
+      console.warn(`[Server] openTab(${id}) timed out waiting for VM ready.`);
+      // Drop the entry — client should reconcile via tab:list on next vm:ready.
+      tabRegistry.delete(id);
+      broadcast({ type: 'tab:list', tabs: tabList() });
+      return null;
+    }
+  }
 
   try {
     const session = await vm.openTab(id);
@@ -158,6 +183,11 @@ async function openTab(id, title) {
       type: 'info', tabId: id,
       text: `\r\n\x1b[1;31m[Error] Could not open shell: ${err.message}\x1b[0m\r\n`,
     });
+    // If we couldn't open the SSH shell, clean up the entry so the client
+    // doesn't end up with a tab that never produces output.
+    tabRegistry.delete(id);
+    broadcast({ type: 'tab:list', tabs: tabList() });
+    return null;
   }
 
   return entry;
@@ -205,9 +235,8 @@ function handleConnection(ws, req) {
       case 'tab:open': {
         const id    = msg.tabId || crypto.randomUUID();
         const title = msg.title || null;
-        openTab(id, title).then((entry) => {
-          // Subscribe this client to the new tab automatically.
-          entry.subscribers.add(ws);
+        openTab(id, title, ws).then((entry) => {
+          if (!entry) return; // openTab already sent the error + cleaned up
           // Replay buffer so the client sees any output already produced.
           if (entry.outputBuffer.length > 0) {
             sendTo(ws, {
@@ -216,7 +245,6 @@ function handleConnection(ws, req) {
               data: entry.outputBuffer.toString('base64'),
             });
           }
-          sendTo(ws, { type: 'tab:opened', tabId: id, title: entry.title, tabs: tabList() });
         }).catch((err) => {
           sendTo(ws, {
             type: 'info',
@@ -338,7 +366,11 @@ vm.on('ready', () => {
 
 vm.on('reset', () => {
   broadcast({ type: 'vm:status', status: 'resetting', networkBlocked: vm.networkBlocked });
-  // Close all tab sessions (the VM is gone); clear their output buffers.
+  // Close all tab sessions (the VM is gone) and clear their output buffers.
+  // The tabs themselves stay in the registry so they re-attach on the next
+  // 'ready' event (see the vm.on('ready') handler above). Tabs that were
+  // created mid-reset (no session yet) are also kept — they get a session
+  // the same way.
   for (const [id, entry] of tabRegistry.entries()) {
     if (entry.session) {
       try { entry.session.close(); } catch (_) {}

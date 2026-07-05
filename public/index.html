@@ -560,12 +560,17 @@
       }
 
       case 'tab:list': {
-        // Sync tab titles for any existing tabs.
+        // Reconcile: server is the source of truth.  Any local tab whose id
+        // is missing from this list (e.g. dropped after a VM reset) must be
+        // disposed locally, and titles must be updated for the survivors.
         if (Array.isArray(msg.tabs)) {
+          const incoming = new Set(msg.tabs.map(t => t.id));
+          for (const id of Array.from(tabs.keys())) {
+            if (!incoming.has(id)) removeLocalTab(id);
+          }
           for (const { id, title } of msg.tabs) {
-            if (tabs.has(id)) {
-              tabs.get(id).titleSpan.textContent = title;
-            }
+            const entry = tabs.get(id);
+            if (entry && title) entry.titleSpan.textContent = title;
           }
         }
         break;
